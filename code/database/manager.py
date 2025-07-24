@@ -123,7 +123,11 @@ class DatabaseManager:
                 conn.close()
 
     def optimized_bulk_insert(
-        self, dataframe: pd.DataFrame, table_name: str, chunk_size: int = 50000
+        self,
+        dataframe: pd.DataFrame,
+        table_name: str,
+        chunk_size: int = 50000,
+        create_table: bool = True,
     ) -> None:
         """
         Optimized bulk insert method for large datasets using COPY with progress tracking.
@@ -141,7 +145,8 @@ class DatabaseManager:
         schema = self._get_table_schema(table_name)
 
         # Create table with optimizations
-        self.create_table_with_schema(table_name, schema)
+        if create_table:
+            self.create_table_with_schema(table_name, schema)
         self.optimize_table_for_bulk_insert(table_name)
 
         # Start progress tracking
@@ -477,7 +482,10 @@ class DatabaseManager:
         return chunk_cleaned
 
     def process_csv_file_to_database(
-        self, file_path: str, table_name: str, chunk_size: int = 10000  # Reduced from 50000
+        self,
+        file_path: str,
+        table_name: str,
+        chunk_size: int = 10000,  # Reduced from 50000
     ) -> None:
         """
         Process a semicolon-separated CSV file directly to database in chunks.
@@ -512,7 +520,9 @@ class DatabaseManager:
                 )
         except Exception:
             total_rows = 0
-            self._logger.warning("Could not count file rows, progress will be approximate")
+            self._logger.warning(
+                "Could not count file rows, progress will be approximate"
+            )
 
         # Start progress tracking
         if total_rows > 0:
@@ -571,13 +581,17 @@ class DatabaseManager:
                         chunk.columns = expected_columns
 
                         # Clean and prepare chunk (optimized)
-                        chunk_cleaned = self._prepare_chunk_for_insert_optimized(chunk, schema)
+                        chunk_cleaned = self._prepare_chunk_for_insert_optimized(
+                            chunk, schema
+                        )
 
                         # Generate CSV data more efficiently
                         output = io.StringIO()
 
                         # Use vectorized operations for better performance
-                        csv_data = self._generate_csv_data_optimized(chunk_cleaned, schema)
+                        csv_data = self._generate_csv_data_optimized(
+                            chunk_cleaned, schema
+                        )
                         output.write(csv_data)
                         output.seek(0)
 
@@ -590,7 +604,9 @@ class DatabaseManager:
                                 null="\\N",
                             )
                         except Exception as copy_error:
-                            self._logger.error(f"COPY error in chunk {chunk_count}: {copy_error}")
+                            self._logger.error(
+                                f"COPY error in chunk {chunk_count}: {copy_error}"
+                            )
 
                             # Debug output (limited)
                             output.seek(0)
@@ -616,10 +632,16 @@ class DatabaseManager:
                             conn.commit()
 
                         # Log progress more frequently
-                        if chunk_count % 25 == 0 or chunk_count <= 10:  # More frequent logging
+                        if (
+                            chunk_count % 25 == 0 or chunk_count <= 10
+                        ):  # More frequent logging
                             elapsed = time.time() - start_time
-                            overall_rate = processed_rows / elapsed if elapsed > 0 else 0
-                            chunk_rate = len(chunk) / chunk_time if chunk_time > 0 else 0
+                            overall_rate = (
+                                processed_rows / elapsed if elapsed > 0 else 0
+                            )
+                            chunk_rate = (
+                                len(chunk) / chunk_time if chunk_time > 0 else 0
+                            )
 
                             if total_rows > 0:
                                 progress = (processed_rows / total_rows) * 100

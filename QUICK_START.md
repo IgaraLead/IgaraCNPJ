@@ -39,7 +39,7 @@ That's it! The ETL process will:
    createdb Dados_RFB
    
    # Run schema creation
-   psql -d Dados_RFB -f code/optimized_schema.sql
+   psql -d Dados_RFB -f code/database_schema.sql
    ```
 
 3. **Configure environment**:
@@ -95,7 +95,7 @@ SELECT * FROM mv_estabelecimento_por_uf;
 ## 🔗 Quick Links
 
 - [Full Documentation](README_OPTIMIZED.md)
-- [Database Schema](code/optimized_schema.sql)
+- [Database Schema](code/database_schema.sql)
 - [Configuration Examples](code/.env.example)
 - [Original Project](https://github.com/aphonsoar/Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ)
 

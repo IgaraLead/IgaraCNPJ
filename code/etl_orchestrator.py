@@ -12,6 +12,21 @@ from download.manager import FileDownloader, FileExtractor, RFBFileDiscovery
 from processing.data_processor import FileClassifier, DataReader, ProcessorFactory
 
 
+# Process each file type
+processing_order = [
+    "cnae",
+    "moti",
+    "munic",
+    "natju",
+    "pais",
+    "quals",  # Reference data first
+    "empresa",
+    "estabelecimento",
+    "socios",
+    "simples",  # Main data tables
+]
+
+
 class ETLOrchestrator:
     """
     Main ETL orchestrator implementing single responsibility principle.
@@ -130,20 +145,6 @@ class ETLOrchestrator:
                 self.config.extracted_files_path
             )
 
-            # Process each file type
-            processing_order = [
-                "cnae",
-                "moti",
-                "munic",
-                "natju",
-                "pais",
-                "quals",  # Reference data first
-                # "empresa",
-                "estabelecimento",
-                "socios",
-                "simples",  # Main data tables
-            ]
-
             for file_type in processing_order:
                 if classified_files[file_type]:
                     self._process_file_type(file_type, classified_files[file_type])
@@ -161,6 +162,7 @@ class ETLOrchestrator:
         processor = ProcessorFactory.get_processor(file_type)
         processing_start = time.time()
 
+        is_first_chunk = True
         for filename in filenames:
             file_path = f"{self.config.extracted_files_path}/{filename}"
             self._logger.info(f"Processing file: {filename}")
@@ -168,15 +170,19 @@ class ETLOrchestrator:
             try:
                 # For large files (estabelecimento, simples), use chunked reading
                 # if file_type in ["estabelecimento", "simples"]:
-                #     self._process_large_file(file_path, file_type, processor)
+                self._process_large_file(
+                    file_path, file_type, processor, is_first_chunk
+                )
                 # else:
-                self._process_regular_file(file_path, file_type, processor)
+                #     self._process_regular_file(file_path, file_type, processor)
 
                 self._logger.info(f"Successfully processed {filename}")
 
             except Exception as e:
                 self._logger.error(f"Error processing {filename}: {e}")
                 raise
+            finally:
+                is_first_chunk = False
 
         processing_end = time.time()
         processing_time = processing_end - processing_start
@@ -185,26 +191,22 @@ class ETLOrchestrator:
             f"Completed {file_type} processing in {processing_time:.2f} seconds"
         )
 
-    def _process_large_file(self, file_path: str, table_name: str, processor) -> None:
+    def _process_large_file(
+        self, file_path: str, table_name: str, processor, is_first_chunk: bool
+    ) -> None:
         """
         Process large files using chunked reading and insertion.
         """
         chunk_count = 0
         for chunk in self.data_reader.read_file_in_chunks(file_path, processor):
-            if chunk_count == 0:
-                # For the first chunk, replace the table
-                self.database_manager.optimized_bulk_insert(
-                    chunk, table_name, self.config.chunk_size
-                )
-            else:
-                # For subsequent chunks, append to the existing table
-                chunk.to_sql(
-                    table_name,
-                    self.database_manager.engine,
-                    if_exists="append",
-                    index=False,
-                    method="multi",
-                )
+            should_create_table = is_first_chunk and chunk_count == 0
+            # For the first chunk, replace the table
+            self.database_manager.optimized_bulk_insert(
+                chunk,
+                table_name,
+                self.config.chunk_size,
+                create_table=should_create_table,
+            )
 
             chunk_count += 1
             self._logger.info(f"Processed chunk {chunk_count} for {table_name}")
