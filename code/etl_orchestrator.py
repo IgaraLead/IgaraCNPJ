@@ -12,21 +12,6 @@ from download.manager import FileDownloader, FileExtractor, RFBFileDiscovery
 from processing.data_processor import FileClassifier, DataReader, ProcessorFactory
 
 
-# Process each file type
-processing_order = [
-    "cnae",
-    "moti",
-    "munic",
-    "natju",
-    "pais",
-    "quals",  # Reference data first
-    "empresa",
-    "estabelecimento",
-    "socios",
-    "simples",  # Main data tables
-]
-
-
 class ETLOrchestrator:
     """
     Main ETL orchestrator implementing single responsibility principle.
@@ -48,6 +33,10 @@ class ETLOrchestrator:
         self.file_classifier = FileClassifier()
         self.data_reader = DataReader(batch_size=config.batch_size)
 
+        # Get processing order from config
+        self.processing_order = config.get_enabled_processing_order()
+        self._logger.info(f"Processing order configured: {self.processing_order}")
+
     def _setup_logging(self) -> None:
         """Configure logging for the ETL process."""
         logging.basicConfig(
@@ -62,6 +51,9 @@ class ETLOrchestrator:
         """
         start_time = time.time()
         self._logger.info("Starting RFB ETL process")
+
+        # Log processing configuration
+        self._log_processing_configuration()
 
         try:
             # Phase 1: Download files
@@ -92,6 +84,13 @@ class ETLOrchestrator:
             self._logger.error(f"ETL process failed: {e}")
             raise
 
+    def _log_processing_configuration(self) -> None:
+        """Log the current processing configuration."""
+        self._logger.info("Processing Configuration:")
+        for file_type, enabled in self.config.processing_config.items():
+            status = "ENABLED" if enabled else "DISABLED"
+            self._logger.info(f"  {file_type.upper()}: {status}")
+
     def _download_phase(self) -> List[str]:
         """
         Download phase: Discover and download RFB files.
@@ -102,8 +101,16 @@ class ETLOrchestrator:
             filenames = self.file_discovery.discover_zip_files()
             self._logger.info(f"Discovered {len(filenames)} files to download")
 
+            # Filter files based on processing configuration
+            filtered_filenames = self._filter_files_by_config(filenames)
+            self._logger.info(
+                f"Filtered to {len(filtered_filenames)} files based on configuration"
+            )
+
             # Create download tasks
-            download_tasks = self.file_discovery.create_download_tasks(filenames)
+            download_tasks = self.file_discovery.create_download_tasks(
+                filtered_filenames
+            )
 
             # Download files in parallel
             downloaded_files = self.file_downloader.download_files_parallel(
@@ -116,6 +123,52 @@ class ETLOrchestrator:
         except Exception as e:
             self._logger.error(f"Download phase failed: {e}")
             raise
+
+    def _filter_files_by_config(self, filenames: List[str]) -> List[str]:
+        """
+        Filter filenames based on processing configuration.
+        Only include files for enabled file types.
+        """
+        filtered_files = []
+
+        for filename in filenames:
+            # Determine file type from filename
+            file_type = self._determine_file_type_from_name(filename)
+
+            if file_type and self.config.is_processing_enabled(file_type):
+                filtered_files.append(filename)
+            elif file_type:
+                self._logger.info(
+                    f"Skipping {filename} - {file_type.upper()} processing is disabled"
+                )
+
+        return filtered_files
+
+    def _determine_file_type_from_name(self, filename: str) -> str:
+        """
+        Determine file type from filename.
+        """
+        filename_lower = filename.lower()
+
+        # Map filename patterns to file types
+        file_type_patterns = {
+            "cnae": ["cnae"],
+            "moti": ["moti"],
+            "munic": ["munic"],
+            "natju": ["natju"],
+            "pais": ["pais"],
+            "quals": ["quals"],
+            "empresa": ["empresa", "emprecsv"],
+            "estabelecimento": ["estabele"],
+            "socios": ["socio"],
+            "simples": ["simples"],
+        }
+
+        for file_type, patterns in file_type_patterns.items():
+            if any(pattern in filename_lower for pattern in patterns):
+                return file_type
+
+        return None
 
     def _extract_phase(self, downloaded_files: List[str]) -> None:
         """
@@ -145,9 +198,12 @@ class ETLOrchestrator:
                 self.config.extracted_files_path
             )
 
-            for file_type in processing_order:
-                if classified_files[file_type]:
+            # Process only enabled file types in the configured order
+            for file_type in self.processing_order:
+                if classified_files.get(file_type):
                     self._process_file_type(file_type, classified_files[file_type])
+                else:
+                    self._logger.info(f"No files found for {file_type.upper()}")
 
         except Exception as e:
             self._logger.error(f"Process and load phase failed: {e}")
@@ -157,7 +213,13 @@ class ETLOrchestrator:
         """
         Process a specific file type and load to database.
         """
-        self._logger.info(f"Processing {file_type} files: {len(filenames)} files")
+        if not self.config.is_processing_enabled(file_type):
+            self._logger.info(f"Skipping {file_type.upper()} - processing disabled")
+            return
+
+        self._logger.info(
+            f"Processing {file_type.upper()} files: {len(filenames)} files"
+        )
 
         processor = ProcessorFactory.get_processor(file_type)
         processing_start = time.time()
@@ -168,13 +230,10 @@ class ETLOrchestrator:
             self._logger.info(f"Processing file: {filename}")
 
             try:
-                # For large files (estabelecimento, simples), use chunked reading
-                # if file_type in ["estabelecimento", "simples"]:
+                # For large files, use chunked reading
                 self._process_large_file(
                     file_path, file_type, processor, is_first_chunk
                 )
-                # else:
-                #     self._process_regular_file(file_path, file_type, processor)
 
                 self._logger.info(f"Successfully processed {filename}")
 
@@ -188,7 +247,7 @@ class ETLOrchestrator:
         processing_time = processing_end - processing_start
 
         self._logger.info(
-            f"Completed {file_type} processing in {processing_time:.2f} seconds"
+            f"Completed {file_type.upper()} processing in {processing_time:.2f} seconds"
         )
 
     def _process_large_file(
@@ -210,15 +269,6 @@ class ETLOrchestrator:
 
             chunk_count += 1
             self._logger.info(f"Processed chunk {chunk_count} for {table_name}")
-
-    def _process_regular_file(self, file_path: str, table_name: str, processor) -> None:
-        """
-        Process regular-sized files.
-        """
-        dataframe = self.data_reader.read_simple_file(file_path, processor)
-        self.database_manager.optimized_bulk_insert(
-            dataframe, table_name, self.config.chunk_size
-        )
 
     def _create_indexes_phase(self) -> None:
         """

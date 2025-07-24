@@ -5,7 +5,7 @@ Handles environment variables and application settings.
 
 import os
 import pathlib
-from typing import Optional
+from typing import Dict, List, Optional
 from dotenv import load_dotenv
 
 
@@ -35,7 +35,7 @@ class DatabaseConfig:
 
 
 class ETLConfig:
-    """Main ETL configuration class."""
+    """Configuration class for ETL process with environment variable support."""
 
     def __init__(self, env_path: Optional[str] = None):
         self.current_path = pathlib.Path().resolve()
@@ -49,12 +49,15 @@ class ETLConfig:
         )
 
         # URLs and constants
-        self.rfb_base_url = f"https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/{os.getenv("FILES_DATE")}/"
+        self.rfb_base_url = f"https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/{os.getenv('FILES_DATE')}/"
 
         # Performance settings
         self.chunk_size = int(os.getenv("CHUNK_SIZE", "4096"))
         self.batch_size = int(os.getenv("BATCH_SIZE", "2000000"))
         self.max_workers = int(os.getenv("MAX_WORKERS", "4"))
+
+        # Processing order configuration
+        self.processing_config = self._load_processing_config()
 
     def _load_environment(self, env_path: Optional[str] = None) -> None:
         """Load environment variables from .env file."""
@@ -79,3 +82,47 @@ class ETLConfig:
         if path and not os.path.exists(path):
             os.makedirs(path)
         return path
+
+    def _load_processing_config(self) -> Dict[str, bool]:
+        """
+        Load processing configuration from environment variables.
+        Default is True for all file types if not specified.
+        """
+        default_processing_order = [
+            "cnae",
+            "moti",
+            "munic",
+            "natju",
+            "pais",
+            "quals",  # Reference data first
+            "empresa",
+            "estabelecimento",
+            "socios",
+            "simples",  # Main data tables
+        ]
+
+        processing_config = {}
+
+        for file_type in default_processing_order:
+            env_var = f"PROCESS_{file_type.upper()}"
+            # Default to True if not specified, convert string to boolean
+            value = os.getenv(env_var, "true").lower()
+            processing_config[file_type] = value in ("true", "1", "yes", "on")
+
+        return processing_config
+
+    def get_enabled_processing_order(self) -> List[str]:
+        """
+        Get the list of file types that should be processed (enabled = True).
+        """
+        return [
+            file_type
+            for file_type, enabled in self.processing_config.items()
+            if enabled
+        ]
+
+    def is_processing_enabled(self, file_type: str) -> bool:
+        """
+        Check if processing is enabled for a specific file type.
+        """
+        return self.processing_config.get(file_type, True)  # Default to True
