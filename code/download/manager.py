@@ -244,7 +244,7 @@ class FileDownloader:
                 if os.path.exists(file_path):
                     try:
                         os.remove(file_path)
-                    except e:
+                    except Exception as e:
                         pass
 
                 if attempt < self.max_retries - 1:
