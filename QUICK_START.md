@@ -6,7 +6,7 @@ This is a quick start guide for the optimized RFB ETL process.
 
 1. **Clone and navigate to the project**:
    ```bash
-   git clone https://github.com/aphonsoar/Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ.git
+   git clone https://github.com/judsonjuniorr/Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ.git
    cd Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ
    ```
 
@@ -97,7 +97,7 @@ SELECT * FROM mv_estabelecimento_por_uf;
 - [Full Documentation](README_OPTIMIZED.md)
 - [Database Schema](code/database_schema.sql)
 - [Configuration Examples](code/.env.example)
-- [Original Project](https://github.com/aphonsoar/Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ)
+- [Original Project](https://github.com/judsonjuniorr/Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ)
 
 ---
 
