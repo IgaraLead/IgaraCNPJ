@@ -4,6 +4,7 @@ Handles database connections, schema creation, and optimized data insertion.
 """
 
 import logging
+import os
 import time
 import io
 import threading
@@ -87,7 +88,7 @@ class DatabaseManager:
                 pool_recycle=1800,  # Shorter recycle time
                 # Remove shared_buffers - it's a server-level parameter
                 connect_args={
-                    "options": "-c work_mem=256MB -c maintenance_work_mem=2GB"
+                    "options": f"-c work_mem={os.getenv('DB_WORK_MEM', '256MB')} -c maintenance_work_mem={os.getenv('DB_MAINTENANCE_WORK_MEM', '2GB')}"
                 },
             )
             self._logger.info("Database connection initialized successfully")
@@ -480,210 +481,6 @@ class DatabaseManager:
                 # For INTEGER and DECIMAL, leave None as is for proper NULL handling
 
         return chunk_cleaned
-
-    def process_csv_file_to_database(
-        self,
-        file_path: str,
-        table_name: str,
-        chunk_size: int = 10000,  # Reduced from 50000
-    ) -> None:
-        """
-        Process a semicolon-separated CSV file directly to database in chunks.
-        Optimized for very large files that may not fit in memory.
-        """
-        self._logger.info(f"PROCESSING CSV file: {file_path} -> {table_name}")
-
-        # Get table schema
-        schema = self._get_table_schema(table_name)
-        expected_columns = list(schema.keys())
-
-        # Create table with optimizations
-        self.create_table_with_schema(table_name, schema)
-        self.optimize_table_for_bulk_insert(table_name)
-
-        # Count total rows for progress tracking (skip for very large files)
-        try:
-            # Only count if file is smaller than 1GB to avoid delays
-            import os
-
-            file_size = os.path.getsize(file_path)
-            if file_size < 1_000_000_000:  # 1GB
-                with open(file_path, "r", encoding="utf-8") as f:
-                    total_rows = sum(1 for _ in f)
-                self._logger.info(
-                    f"FILE ANALYSIS: Contains approximately {total_rows:,} rows"
-                )
-            else:
-                total_rows = 0
-                self._logger.info(
-                    f"FILE ANALYSIS: Large file ({file_size:,} bytes), skipping row count"
-                )
-        except Exception:
-            total_rows = 0
-            self._logger.warning(
-                "Could not count file rows, progress will be approximate"
-            )
-
-        # Start progress tracking
-        if total_rows > 0:
-            self._progress_tracker.start_tracking(table_name, total_rows)
-
-        start_time = time.time()
-        processed_rows = 0
-        chunk_count = 0
-
-        try:
-            # Read file in chunks with smaller chunk size for memory efficiency
-            chunk_reader = pd.read_csv(
-                file_path,
-                chunksize=chunk_size,
-                sep=";",  # RFB files use semicolon separator
-                header=None,
-                names=None,  # Don't assign names initially
-                dtype="str",  # Read everything as string initially
-                low_memory=True,  # Enable low memory mode
-                na_values=[""],
-                keep_default_na=False,
-                encoding="utf-8",
-                quoting=0,  # QUOTE_MINIMAL
-                on_bad_lines="skip",  # Skip malformed lines
-                engine="c",  # Use faster C engine
-            )
-
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    for chunk in chunk_reader:
-                        chunk_count += 1
-                        chunk_start_time = time.time()
-
-                        # Handle variable column counts
-                        actual_columns = len(chunk.columns)
-                        expected_count = len(expected_columns)
-
-                        # Adjust columns to match schema
-                        if actual_columns < expected_count:
-                            # Add missing columns with empty values
-                            for i in range(actual_columns, expected_count):
-                                chunk[i] = ""
-                            if chunk_count <= 5:  # Only log for first few chunks
-                                self._logger.debug(
-                                    f"Added {expected_count - actual_columns} missing columns to chunk {chunk_count}"
-                                )
-                        elif actual_columns > expected_count:
-                            # Drop extra columns
-                            chunk = chunk.iloc[:, :expected_count]
-                            if chunk_count <= 5:  # Only log for first few chunks
-                                self._logger.debug(
-                                    f"Dropped {actual_columns - expected_count} extra columns from chunk {chunk_count}"
-                                )
-
-                        # Assign proper column names
-                        chunk.columns = expected_columns
-
-                        # Clean and prepare chunk (optimized)
-                        chunk_cleaned = self._prepare_chunk_for_insert_optimized(
-                            chunk, schema
-                        )
-
-                        # Generate CSV data more efficiently
-                        output = io.StringIO()
-
-                        # Use vectorized operations for better performance
-                        csv_data = self._generate_csv_data_optimized(
-                            chunk_cleaned, schema
-                        )
-                        output.write(csv_data)
-                        output.seek(0)
-
-                        try:
-                            cur.copy_from(
-                                output,
-                                table_name,
-                                columns=expected_columns,
-                                sep="\t",
-                                null="\\N",
-                            )
-                        except Exception as copy_error:
-                            self._logger.error(
-                                f"COPY error in chunk {chunk_count}: {copy_error}"
-                            )
-
-                            # Debug output (limited)
-                            output.seek(0)
-                            sample_lines = output.read().split("\n")[:2]
-                            self._logger.error("Sample problematic lines:")
-                            for idx, line in enumerate(sample_lines):
-                                if line.strip():
-                                    self._logger.error(
-                                        f"Line {idx + 1}: {repr(line[:200])}"
-                                    )  # Limit output
-
-                            raise
-
-                        processed_rows += len(chunk)
-                        chunk_time = time.time() - chunk_start_time
-
-                        # Update progress
-                        if total_rows > 0:
-                            self._progress_tracker.update_progress(processed_rows)
-
-                        # Commit more frequently for smaller chunks
-                        if chunk_count % 50 == 0:  # Every 50 chunks instead of 20
-                            conn.commit()
-
-                        # Log progress more frequently
-                        if (
-                            chunk_count % 25 == 0 or chunk_count <= 10
-                        ):  # More frequent logging
-                            elapsed = time.time() - start_time
-                            overall_rate = (
-                                processed_rows / elapsed if elapsed > 0 else 0
-                            )
-                            chunk_rate = (
-                                len(chunk) / chunk_time if chunk_time > 0 else 0
-                            )
-
-                            if total_rows > 0:
-                                progress = (processed_rows / total_rows) * 100
-                                self._logger.info(
-                                    f"PROGRESS {table_name}: Chunk {chunk_count:>4} | "
-                                    f"{progress:>5.1f}% | {processed_rows:>9,}/{total_rows:,} rows | "
-                                    f"Rate: {overall_rate:>7,.0f} rows/sec | "
-                                    f"Chunk: {chunk_rate:>6,.0f} rows/sec"
-                                )
-                            else:
-                                self._logger.info(
-                                    f"PROGRESS {table_name}: Chunk {chunk_count:>4} | "
-                                    f"{processed_rows:>9,} rows | "
-                                    f"Rate: {overall_rate:>7,.0f} rows/sec | "
-                                    f"Chunk: {chunk_rate:>6,.0f} rows/sec"
-                                )
-
-                        # Force garbage collection every 100 chunks
-                        if chunk_count % 100 == 0:
-                            import gc
-
-                            gc.collect()
-
-                conn.commit()
-
-        except Exception as e:
-            self._logger.error(f"ERROR processing CSV file {file_path}: {e}")
-            raise
-
-        # Finalize table
-        self._logger.info(f"FINALIZING table {table_name}...")
-        self.finalize_table_after_bulk_insert(table_name)
-
-        end_time = time.time()
-        duration = end_time - start_time
-        rate = processed_rows / duration if duration > 0 else 0
-
-        self._logger.info(
-            f"COMPLETED: {file_path} -> {table_name} | "
-            f"{processed_rows:,} rows in {duration:.2f}s | "
-            f"Rate: {rate:,.0f} rows/sec"
-        )
 
     def _get_table_schema(self, table_name: str) -> Dict[str, str]:
         """Get table schema based on table name."""

@@ -4,6 +4,8 @@ Coordinates all ETL operations following SOLID principles.
 """
 
 import logging
+from os import path
+import os
 import time
 from typing import List
 from config.settings import ETLConfig
@@ -300,7 +302,8 @@ def main():
     """
     try:
         # Load configuration
-        config = ETLConfig("D:\\sources\\RFB-_Dados_Publicos_CNPJ\\code\\.env")
+        env_path = path.join(os.getcwd(), "code", ".env")
+        config = ETLConfig(env_path)
 
         # Create and run ETL orchestrator
         etl = ETLOrchestrator(config)
