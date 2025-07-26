@@ -49,7 +49,10 @@ class ETLConfig:
         )
 
         # URLs and constants
-        self.rfb_base_url = f"https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/{os.getenv('FILES_DATE')}/"
+        files_date = os.getenv("FILES_DATE")
+        if not files_date:
+            raise ValueError("FILES_DATE environment variable is not set. Please set it in your environment or .env file.")
+        self.rfb_base_url = f"https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/{files_date}/"
 
         # Performance settings
         self.chunk_size = int(os.getenv("CHUNK_SIZE", "4096"))
