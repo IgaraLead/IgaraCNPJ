@@ -38,7 +38,7 @@ services:
   etl:
     build:
       context: .
-      dockerfile: Dockerfile.optimized
+      dockerfile: Dockerfile
     container_name: rfb_etl
     depends_on:
       postgres:
