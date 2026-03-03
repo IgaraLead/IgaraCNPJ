@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS config_sistema (
     atualizado_em TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS historico_buscas (
+    id SERIAL PRIMARY KEY,
+    usuario_id INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    search_id VARCHAR(36) UNIQUE NOT NULL,
+    params JSONB NOT NULL DEFAULT '{}',
+    total_results INT DEFAULT 0,
+    status VARCHAR(30) DEFAULT 'realizada',
+    credits_consumed INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_historico_buscas_usuario ON historico_buscas (usuario_id);
+CREATE INDEX IF NOT EXISTS idx_historico_buscas_search_id ON historico_buscas (search_id);
+CREATE INDEX IF NOT EXISTS idx_historico_buscas_created ON historico_buscas (created_at DESC);
+
 
 -- ─── RFB Reference Tables ──────────────────────────────────
 

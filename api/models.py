@@ -86,6 +86,21 @@ class LogAcao(Base):
     usuario = relationship("Usuario", back_populates="logs")
 
 
+class HistoricoBusca(Base):
+    __tablename__ = "historico_buscas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    search_id = Column(String(36), unique=True, nullable=False, index=True)
+    params = Column(JSONB, nullable=False)
+    total_results = Column(Integer, default=0)
+    status = Column(String(30), default="realizada")  # realizada, processada, exportada
+    credits_consumed = Column(Integer, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(timezone.utc))
+
+    usuario = relationship("Usuario")
+
+
 class ConfigSistema(Base):
     __tablename__ = "config_sistema"
 

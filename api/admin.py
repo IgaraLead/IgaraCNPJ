@@ -3,16 +3,21 @@ Super-admin endpoints: stats, queue control, UF management, logs, user managemen
 All endpoints require super_admin role.
 """
 
+import asyncio
+import json
 import os
 import datetime
+import time as _time
 from typing import List
 
+import redis
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from .database import get_db
-from .auth import require_super_admin
+from .auth import require_super_admin, get_current_user
 from .models import (
     Usuario, Credito, CreditoTransacao, Assinatura,
     LogAcao, ConfigSistema,
@@ -20,7 +25,11 @@ from .models import (
 from .schemas import (
     AjusteCreditos, ToggleUF, ToggleQueue, LogAcaoOut, StatsOut,
 )
-from .redis_queue import redis_client, get_queue_size, cache_clear_all, etl_progress_get, etl_progress_set
+from .redis_queue import (
+    redis_client, get_queue_size, cache_clear_all,
+    etl_progress_get, etl_progress_set,
+    ETL_PROGRESS_CHANNEL, REDIS_HOST, REDIS_PORT, REDIS_DB,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -267,15 +276,92 @@ def list_users(
 
 # ─── ETL / Maintenance ──────────────────────────────────
 
+def _check_stale_progress(data: dict) -> dict:
+    """If progress is stale (no update in 2+ min), mark as error."""
+    if data.get("running") and data.get("phase") not in ("done", "error"):
+        updated_at = data.get("updated_at", 0)
+        if _time.time() - updated_at > 120:
+            data = {
+                "running": False,
+                "phase": "error",
+                "step": "Processo interrompido (timeout)",
+                "percent": 0,
+                "detail": "O processo parou de reportar progresso e foi marcado como encerrado.",
+                "updated_at": _time.time(),
+            }
+            etl_progress_set(data)
+    return data
+
+
 @router.get("/etl-progress")
 def get_etl_progress(
     admin: Usuario = Depends(require_super_admin),
 ):
-    """Return current ETL progress from Redis."""
+    """Return current ETL progress from Redis. Auto-resets stale runs."""
     data = etl_progress_get()
     if not data:
         return {"running": False}
-    return data
+    return _check_stale_progress(data)
+
+
+@router.get("/etl-progress/stream")
+async def etl_progress_stream(
+    request: Request,
+    admin: Usuario = Depends(require_super_admin),
+):
+    """SSE stream of ETL progress updates (replaces polling)."""
+
+    async def event_generator():
+        # 1) Send current state immediately
+        data = etl_progress_get()
+        if not data:
+            data = {"running": False}
+        else:
+            data = _check_stale_progress(data)
+        yield f"data: {json.dumps(data)}\n\n"
+
+        # 2) Subscribe to Redis Pub/Sub for real-time updates
+        if not redis_client:
+            return
+
+        sub_client = redis.Redis(
+            host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB,
+            decode_responses=True, socket_connect_timeout=5,
+        )
+        pubsub = sub_client.pubsub()
+        pubsub.subscribe(ETL_PROGRESS_CHANNEL)
+
+        try:
+            while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    break
+
+                msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if msg and msg["type"] == "message":
+                    payload = msg["data"]
+                    parsed = json.loads(payload)
+                    parsed = _check_stale_progress(parsed)
+                    yield f"data: {json.dumps(parsed)}\n\n"
+                else:
+                    # Send keepalive comment every ~15s to prevent proxy timeouts
+                    yield ": keepalive\n\n"
+
+                await asyncio.sleep(0.5)
+        finally:
+            pubsub.unsubscribe(ETL_PROGRESS_CHANNEL)
+            pubsub.close()
+            sub_client.close()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/run-etl")
@@ -327,6 +413,75 @@ def run_etl(
     thread.start()
 
     return {"status": "ETL iniciado em background"}
+
+
+@router.post("/reindex")
+def reindex(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_super_admin),
+):
+    """Recreate database indexes in background (super-admin only)."""
+    from .etl.config.settings import ETLConfig, DatabaseConfig
+    from .etl.database.manager import DatabaseManager
+    import threading
+    import time as _time
+
+    # Check if ETL is running
+    progress = etl_progress_get()
+    if progress and progress.get("running") and progress.get("phase") not in ("done", "error"):
+        raise HTTPException(status_code=409, detail="ETL em execução — aguarde para reindexar")
+
+    log = LogAcao(
+        usuario_id=admin.id,
+        acao="reindex",
+        detalhes={},
+        ip_address=request.client.host if request.client else None,
+    )
+    db.add(log)
+    db.commit()
+
+    etl_progress_set({
+        "running": True,
+        "phase": "index",
+        "step": "Recriando índices...",
+        "percent": 50,
+        "detail": "",
+        "updated_at": _time.time(),
+    })
+
+    def _reindex_bg():
+        import logging
+        logger = logging.getLogger(__name__)
+        try:
+            db_config = DatabaseConfig()
+            manager = DatabaseManager(db_config)
+            manager.initialize_connection()
+            manager.create_optimized_indexes()
+            etl_progress_set({
+                "running": False,
+                "phase": "done",
+                "step": "Índices recriados com sucesso",
+                "percent": 100,
+                "detail": "",
+                "updated_at": _time.time(),
+            })
+            logger.info("Reindex completed successfully")
+        except Exception as e:
+            logger.error(f"Reindex background error: {e}")
+            etl_progress_set({
+                "running": False,
+                "phase": "error",
+                "step": f"Erro ao reindexar: {e}",
+                "percent": 0,
+                "detail": str(e),
+                "updated_at": _time.time(),
+            })
+
+    thread = threading.Thread(target=_reindex_bg, daemon=True)
+    thread.start()
+
+    return {"status": "Reindexação iniciada em background"}
 
 
 @router.post("/clear-cache")

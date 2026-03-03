@@ -148,10 +148,24 @@ export const creditsApi = {
 
 export interface SearchParams {
   uf: string;
-  municipio?: string;
+  municipio?: string; // comma-separated municipio codes
   cnae?: string;
   situacao?: string;
   porte?: string;
+  natureza_juridica?: string;
+  cep?: string;
+  bairro?: string;
+  logradouro?: string;
+  matriz_filial?: string;
+  capital_social_min?: number;
+  capital_social_max?: number;
+  data_abertura_inicio?: string;
+  data_abertura_fim?: string;
+  ddd?: string;
+  com_email?: boolean;
+  com_telefone?: boolean;
+  simples?: string;
+  mei?: string;
   q?: string;
   page?: number;
   limit?: number;
@@ -167,6 +181,18 @@ export interface SearchResult {
   uf: string;
   municipio: string | null;
   cnae_fiscal_principal: string | null;
+  bairro: string | null;
+  logradouro: string | null;
+  numero: string | null;
+  complemento: string | null;
+  cep: string | null;
+  telefone: string | null;
+  email: string | null;
+  capital_social: number | null;
+  natureza_juridica: number | null;
+  porte_empresa: number | null;
+  data_inicio_atividade: string | null;
+  identificador_matriz_filial: number | null;
 }
 
 export interface SearchResponse {
@@ -175,12 +201,63 @@ export interface SearchResponse {
   page: number;
   limit: number;
   credits_consumed: number;
+  task_id?: string;
+  search_id?: string;
+}
+
+export interface Municipio {
+  codigo: number;
+  descricao: string;
+}
+
+export interface ProcessResponse {
+  results: SearchResult[];
+  total: number;
+  credits_consumed: number;
+}
+
+export interface ExportCreditResponse {
+  task_id: string;
+  status: string;
+  credits_consumed: number;
+}
+
+export interface SearchHistory {
+  id: number;
+  search_id: string;
+  params: SearchParams;
+  total_results: number;
+  status: string;
+  credits_consumed: number;
+  created_at: string;
+}
+
+export interface SearchHistoryDetail {
+  search_id: string;
+  params: SearchParams;
+  total_results: number;
+  status: string;
+  credits_consumed: number;
+  created_at: string;
 }
 
 export const searchApi = {
   search: (params: SearchParams) =>
     request<SearchResponse>("/search", { method: "POST", body: JSON.stringify(params) }),
   lookupCnpj: (cnpj: string) => request<Record<string, unknown>>(`/search/${cnpj}`),
+  municipios: (uf: string) => request<Municipio[]>(`/search/municipios?uf=${uf}`),
+  process: (searchParams: SearchParams, quantidade: number) =>
+    request<ProcessResponse>("/search/process", {
+      method: "POST",
+      body: JSON.stringify({ search_params: searchParams, quantidade }),
+    }),
+  exportWithCredits: (searchParams: SearchParams, formato: "csv" | "xlsx") =>
+    request<ExportCreditResponse>("/search/export", {
+      method: "POST",
+      body: JSON.stringify({ search_params: searchParams, formato }),
+    }),
+  history: (limit = 50) => request<SearchHistory[]>(`/search/history?limit=${limit}`),
+  historyDetail: (searchId: string) => request<SearchHistoryDetail>(`/search/history/${searchId}`),
 };
 
 // ─── Export ────────────────────────────────────────────────
@@ -235,5 +312,6 @@ export const adminApi = {
     request<{ user_id: number; ativo: boolean }>(`/admin/users/${userId}/block`, { method: "POST" }),
   etlProgress: () => request<EtlProgress>("/admin/etl-progress"),
   runEtl: () => request<{ status: string }>("/admin/run-etl", { method: "POST" }),
+  reindex: () => request<{ status: string }>("/admin/reindex", { method: "POST" }),
   clearCache: () => request<{ status: string }>("/admin/clear-cache", { method: "POST" }),
 };

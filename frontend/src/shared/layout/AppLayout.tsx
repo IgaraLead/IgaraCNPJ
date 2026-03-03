@@ -3,16 +3,37 @@ import { Outlet, NavLink, Navigate, useNavigate, useLocation } from "react-route
 import { useAuth } from "../store";
 
 const navItems = [
-  { to: "/dashboard", label: "Dashboard", icon: "📊" },
-  { to: "/search", label: "Consultas", icon: "🔍" },
-  { to: "/history", label: "Histórico", icon: "📋" },
-  { to: "/plans", label: "Planos", icon: "💎" },
-  { to: "/settings", label: "Configurações", icon: "⚙️" },
+  { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
+  { to: "/search", label: "Consultas", icon: "search" },
+  { to: "/history", label: "Histórico", icon: "history" },
+  { to: "/plans", label: "Planos", icon: "plans" },
+  { to: "/settings", label: "Configurações", icon: "settings" },
 ];
 
 const adminItems = [
-  { to: "/admin", label: "Admin", icon: "🛡️" },
+  { to: "/admin", label: "Admin", icon: "admin" },
 ];
+
+/* SVG icons for sidebar (no emojis) */
+function NavIcon({ name }: { name: string }) {
+  const props = { width: 18, height: 18, fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  switch (name) {
+    case "dashboard":
+      return <svg {...props} viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>;
+    case "search":
+      return <svg {...props} viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.35-4.35" /></svg>;
+    case "history":
+      return <svg {...props} viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 15" /></svg>;
+    case "plans":
+      return <svg {...props} viewBox="0 0 24 24"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" /></svg>;
+    case "settings":
+      return <svg {...props} viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>;
+    case "admin":
+      return <svg {...props} viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>;
+    default:
+      return null;
+  }
+}
 
 export default function AppLayout() {
   const { user, loading, fetchUser, logout } = useAuth();
@@ -55,19 +76,27 @@ export default function AppLayout() {
       {/* Mobile overlay */}
       <div className={`sidebar-overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
 
-      {/* Sidebar */}
+      {/* Sidebar – fixed position */}
       <aside
-        className={`glass-strong sidebar ${sidebarOpen ? "open" : ""}`}
+        className={`sidebar ${sidebarOpen ? "open" : ""}`}
         style={{
-          width: "var(--sidebar-width, 260px)",
+          width: 260,
           minWidth: 260,
+          position: "fixed",
+          top: 0,
+          left: 0,
+          bottom: 0,
           padding: "1.5rem 1rem",
           display: "flex",
           flexDirection: "column",
           gap: "0.25rem",
           borderRadius: 0,
-          borderRight: "1px solid rgba(45,56,71,0.5)",
-          background: "rgba(26,31,46,0.85)",
+          borderRight: "1px solid rgba(45,56,71,0.3)",
+          background: "rgba(14,17,28,0.92)",
+          backdropFilter: "blur(20px)",
+          WebkitBackdropFilter: "blur(20px)",
+          zIndex: 50,
+          overflowY: "auto",
         }}
       >
         <div style={{ padding: "0.5rem", marginBottom: "1.5rem" }}>
@@ -79,26 +108,35 @@ export default function AppLayout() {
           </p>
         </div>
 
-        <nav style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+        <nav style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
           {items.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
+              className="sidebar-nav-btn"
               style={({ isActive }) => ({
                 display: "flex",
                 alignItems: "center",
                 gap: "0.75rem",
-                padding: "0.625rem 0.75rem",
-                borderRadius: "8px",
+                padding: "0.65rem 0.85rem",
+                borderRadius: "10px",
                 textDecoration: "none",
                 color: isActive ? "#fff" : "rgba(255,255,255,0.55)",
-                background: isActive ? "rgba(0,112,255,0.15)" : "transparent",
                 fontSize: "0.875rem",
                 fontWeight: isActive ? 600 : 400,
-                transition: "all 0.15s",
+                transition: "all 0.3s ease",
+                position: "relative",
+                overflow: "hidden",
+                background: isActive ? "rgba(0,112,255,0.12)" : "transparent",
+                border: isActive
+                  ? "1px solid rgba(0,112,255,0.25)"
+                  : "1px solid transparent",
+                boxShadow: isActive
+                  ? "0 0 15px rgba(0,112,255,0.1), inset 0 1px 0 rgba(255,255,255,0.06)"
+                  : "none",
               })}
             >
-              <span>{item.icon}</span>
+              <NavIcon name={item.icon} />
               {item.label}
             </NavLink>
           ))}
@@ -122,8 +160,8 @@ export default function AppLayout() {
         </div>
       </aside>
 
-      {/* Main content */}
-      <main style={{ flex: 1, overflow: "auto" }}>
+      {/* Main content – offset by sidebar width, independently scrollable */}
+      <main style={{ flex: 1, marginLeft: 260, minHeight: "100vh", overflowY: "auto" }}>
         <Outlet />
       </main>
     </div>

@@ -112,6 +112,20 @@ class SearchRequest(BaseModel):
     cnae: Optional[str] = None
     situacao: Optional[str] = None
     porte: Optional[str] = None
+    natureza_juridica: Optional[str] = None
+    cep: Optional[str] = None
+    bairro: Optional[str] = None
+    logradouro: Optional[str] = None
+    matriz_filial: Optional[str] = None  # 1=Matriz, 2=Filial
+    capital_social_min: Optional[float] = None
+    capital_social_max: Optional[float] = None
+    data_abertura_inicio: Optional[str] = None  # YYYYMMDD
+    data_abertura_fim: Optional[str] = None
+    ddd: Optional[str] = None
+    com_email: Optional[bool] = None
+    com_telefone: Optional[bool] = None
+    simples: Optional[str] = None  # S, N
+    mei: Optional[str] = None  # S, N
     q: Optional[str] = None
     page: int = 1
     limit: int = 50
@@ -127,6 +141,18 @@ class SearchResult(BaseModel):
     uf: str
     municipio: Optional[str] = None
     cnae_fiscal_principal: Optional[str] = None
+    bairro: Optional[str] = None
+    logradouro: Optional[str] = None
+    numero: Optional[str] = None
+    complemento: Optional[str] = None
+    cep: Optional[str] = None
+    telefone: Optional[str] = None
+    email: Optional[str] = None
+    capital_social: Optional[float] = None
+    natureza_juridica: Optional[int] = None
+    porte_empresa: Optional[int] = None
+    data_inicio_atividade: Optional[str] = None
+    identificador_matriz_filial: Optional[int] = None
 
 
 class SearchResponse(BaseModel):
@@ -136,6 +162,7 @@ class SearchResponse(BaseModel):
     limit: int
     credits_consumed: int
     task_id: Optional[str] = None
+    search_id: Optional[str] = None
 
 
 # ─── Export ──────────────────────────────────────────────
@@ -146,6 +173,20 @@ class ExportRequest(BaseModel):
     cnae: Optional[str] = None
     situacao: Optional[str] = None
     porte: Optional[str] = None
+    natureza_juridica: Optional[str] = None
+    cep: Optional[str] = None
+    bairro: Optional[str] = None
+    logradouro: Optional[str] = None
+    matriz_filial: Optional[str] = None
+    capital_social_min: Optional[float] = None
+    capital_social_max: Optional[float] = None
+    data_abertura_inicio: Optional[str] = None
+    data_abertura_fim: Optional[str] = None
+    ddd: Optional[str] = None
+    com_email: Optional[bool] = None
+    com_telefone: Optional[bool] = None
+    simples: Optional[str] = None
+    mei: Optional[str] = None
     q: Optional[str] = None
     formato: str = "csv"  # csv or xlsx
 
@@ -154,6 +195,21 @@ class ExportStatusOut(BaseModel):
     task_id: str
     status: str  # processing, ready, failed
     download_url: Optional[str] = None
+
+
+# ─── History ─────────────────────────────────────────────
+
+class HistoricoBuscaOut(BaseModel):
+    id: int
+    search_id: str
+    params: dict
+    total_results: int
+    status: str
+    credits_consumed: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 # ─── Admin ───────────────────────────────────────────────

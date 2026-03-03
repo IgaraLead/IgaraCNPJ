@@ -112,13 +112,16 @@ def get_task_status(task_id: str) -> Optional[dict]:
 # ─── ETL Progress ──────────────────────────────────────
 
 ETL_PROGRESS_KEY = "etl:progress"
+ETL_PROGRESS_CHANNEL = "etl:progress:updates"
 
 def etl_progress_set(data: dict, ttl: int = 86400):
-    """Store ETL progress state (default 24h TTL)."""
+    """Store ETL progress state and publish to Pub/Sub channel."""
     if not redis_client:
         return
     try:
-        redis_client.setex(ETL_PROGRESS_KEY, ttl, json.dumps(data))
+        payload = json.dumps(data)
+        redis_client.setex(ETL_PROGRESS_KEY, ttl, payload)
+        redis_client.publish(ETL_PROGRESS_CHANNEL, payload)
     except redis.RedisError as e:
         logger.error(f"Redis etl_progress_set failed: {e}")
 

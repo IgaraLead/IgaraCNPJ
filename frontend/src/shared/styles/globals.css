@@ -232,8 +232,53 @@ tr:hover td {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes glassShine {
+  0% { left: -100%; }
+  100% { left: 200%; }
+}
+
 .animate-in {
   animation: fadeIn 0.4s ease-out;
+}
+
+/* ─── Sidebar Glassmorphism Nav Buttons ───────────────────── */
+.sidebar-nav-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.sidebar-nav-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.06) 30%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.06) 70%,
+    transparent 100%
+  );
+  transform: skewX(-20deg);
+  transition: none;
+  pointer-events: none;
+}
+
+.sidebar-nav-btn:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow:
+    0 0 20px rgba(0, 112, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+  color: #fff !important;
+  backdrop-filter: blur(12px);
+}
+
+.sidebar-nav-btn:hover::before {
+  animation: glassShine 0.8s ease-in-out forwards;
 }
 
 /* ─── Scrollbar ───────────────────────────────────────────── */
@@ -253,22 +298,20 @@ tr:hover td {
 
 /* ─── Responsive ──────────────────────────────────────────── */
 @media (max-width: 768px) {
-  :root {
-    --sidebar-width: 0px;
-  }
-
   .sidebar {
-    position: fixed;
-    left: -260px;
+    position: fixed !important;
+    left: -260px !important;
     top: 0;
     bottom: 0;
-    width: 260px;
+    width: 260px !important;
+    min-width: 260px !important;
     z-index: 100;
     transition: left 0.3s ease;
+    margin-left: 0 !important;
   }
 
   .sidebar.open {
-    left: 0;
+    left: 0 !important;
   }
 
   .sidebar-overlay {
@@ -285,6 +328,11 @@ tr:hover td {
 
   .mobile-menu-btn {
     display: flex !important;
+  }
+
+  /* Remove sidebar offset on mobile */
+  main {
+    margin-left: 0 !important;
   }
 
   .page {

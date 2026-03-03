@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { adminApi, type Stats, type EtlProgress } from "../../shared/api";
 import { useAuth } from "../../shared/store";
@@ -288,33 +288,57 @@ const PHASE_LABELS: Record<string, string> = {
 
 function MaintenanceSection() {
   const queryClient = useQueryClient();
-  const [polling, setPolling] = useState(false);
+  const [progress, setProgress] = useState<EtlProgress | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
-  // Poll ETL progress every 2s when active
-  const { data: progress } = useQuery<EtlProgress>({
-    queryKey: ["etl-progress"],
-    queryFn: adminApi.etlProgress,
-    refetchInterval: polling ? 2000 : false,
-  });
-
-  // Start/stop polling based on running state
-  useEffect(() => {
-    if (progress?.running && progress.phase !== "done" && progress.phase !== "error") {
-      setPolling(true);
-    } else if (progress && (progress.phase === "done" || progress.phase === "error" || !progress.running)) {
-      // Keep polling for a bit after done so UI catches final state
-      const timer = setTimeout(() => setPolling(false), 4000);
-      return () => clearTimeout(timer);
+  // SSE connection for real-time ETL progress
+  const connectSSE = useCallback(() => {
+    // Close existing connection if any
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
     }
-  }, [progress]);
+
+    const es = new EventSource("/api/admin/etl-progress/stream", { withCredentials: true });
+
+    es.onmessage = (event) => {
+      try {
+        const data: EtlProgress = JSON.parse(event.data);
+        setProgress(data);
+
+        // Refresh stats when ETL finishes
+        if (data.phase === "done" || data.phase === "error") {
+          queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
+        }
+      } catch {
+        // Ignore parse errors (e.g. keepalive comments)
+      }
+    };
+
+    es.onerror = () => {
+      es.close();
+      // Reconnect after 5s on error
+      setTimeout(connectSSE, 5000);
+    };
+
+    eventSourceRef.current = es;
+  }, [queryClient]);
+
+  useEffect(() => {
+    connectSSE();
+    return () => {
+      eventSourceRef.current?.close();
+    };
+  }, [connectSSE]);
 
   const etlMut = useMutation({
     mutationFn: adminApi.runEtl,
     onSuccess: () => {
-      setPolling(true);
-      queryClient.invalidateQueries({ queryKey: ["etl-progress"] });
       queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
     },
+  });
+
+  const reindexMut = useMutation({
+    mutationFn: adminApi.reindex,
   });
 
   const cacheMut = useMutation({
@@ -338,6 +362,13 @@ function MaintenanceSection() {
           disabled={!!isRunning || etlMut.isPending}
         >
           {isRunning ? "⏳ ETL em execução..." : "🔄 Rodar ETL"}
+        </button>
+        <button
+          className="btn btn-ghost"
+          onClick={() => reindexMut.mutate()}
+          disabled={!!isRunning || reindexMut.isPending}
+        >
+          {reindexMut.isPending ? "Reindexando..." : "🗂️ Recriar Índices"}
         </button>
         <button className="btn btn-ghost" onClick={() => cacheMut.mutate()} disabled={cacheMut.isPending}>
           {cacheMut.isPending ? "Limpando..." : "🧹 Limpar Cache"}
@@ -416,6 +447,11 @@ function MaintenanceSection() {
       {etlMut.isError && !isRunning && (
         <p style={{ color: "#fca5a5", marginTop: "0.5rem", fontSize: "0.875rem" }}>
           {etlMut.error?.message}
+        </p>
+      )}
+      {reindexMut.isError && !isRunning && (
+        <p style={{ color: "#fca5a5", marginTop: "0.5rem", fontSize: "0.875rem" }}>
+          {reindexMut.error?.message}
         </p>
       )}
       {cacheMut.isSuccess && <p style={{ color: "#86efac", marginTop: "0.5rem", fontSize: "0.875rem" }}>Cache limpo!</p>}

@@ -554,6 +554,8 @@ class DatabaseManager:
 
             start_time = time.time()
             with self.get_connection() as conn:
+                # CONCURRENTLY requires autocommit (no transaction block)
+                conn.autocommit = True
                 with conn.cursor() as cur:
                     for index_name, columns, constraint in index_configs[table]:
                         try:
@@ -563,13 +565,11 @@ class DatabaseManager:
                                 query = f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name} ON {table} ({columns})"
 
                             cur.execute(query)
-                            conn.commit()
                             self._logger.info(f"Index created: {index_name}")
                         except Exception as e:
                             self._logger.warning(
                                 f"Index creation failed: {index_name} - {e}"
                             )
-                            conn.rollback()
 
             end_time = time.time()
             self._logger.info(
