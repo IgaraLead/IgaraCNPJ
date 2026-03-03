@@ -1,0 +1,23 @@
+# ============================================================
+#  Override para DESENVOLVIMENTO
+#  Carregado automaticamente pelo Docker Compose.
+#  Para produção, use: docker compose -f docker-compose.yml up
+# ============================================================
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+    environment:
+      VITE_API_TARGET: http://backend:8000
+
+  backend:
+    # Em dev, 1 worker + reload automático
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./api:/app/api

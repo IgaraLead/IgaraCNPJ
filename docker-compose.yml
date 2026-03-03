@@ -1,98 +1,94 @@
-# Optimized Docker Compose for RFB ETL with PostgreSQL
-services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: rfb_postgres
-    environment:
-      POSTGRES_DB: Dados_RFB
-      POSTGRES_USER: ${DB_USER:-rfb_user}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-rfb_password}
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./code/database_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
-    ports:
-      - "${DB_PORT:-5432}:5432"
-    command: >
-      postgres
-      -c max_connections=200
-      -c shared_buffers=256MB
-      -c effective_cache_size=1GB
-      -c maintenance_work_mem=64MB
-      -c checkpoint_completion_target=0.9
-      -c wal_buffers=16MB
-      -c default_statistics_target=100
-      -c random_page_cost=1.1
-      -c effective_io_concurrency=200
-      -c work_mem=4MB
-      -c min_wal_size=1GB
-      -c max_wal_size=4GB
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-rfb_user} -d Dados_RFB"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
+# ============================================================
+#  igarateca – Docker Compose
+# ============================================================
+#  Uso:
+#    cp .env.example .env   # ajustar variáveis
+#    docker compose up -d --build
+#
+#  Seu nginx externo deve fazer proxy:
+#    location /api/ {
+#        proxy_pass http://localhost:8000/;   # strip /api
+#        proxy_set_header Host $host;
+#        proxy_set_header X-Real-IP $remote_addr;
+#        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#        proxy_set_header X-Forwarded-Proto $scheme;
+#    }
+#    location / {
+#        proxy_pass http://localhost:3000;
+#        proxy_set_header Host $host;
+#        proxy_set_header X-Real-IP $remote_addr;
+#    }
+# ============================================================
 
-  etl:
+services:
+
+  # ── Banco de Dados ──
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-cnpj_platform}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # ports:
+    #   - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Cache / Fila ──
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # ports:
+    #   - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend (FastAPI) ──
+  backend:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: rfb_etl
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Sobrescreve hosts para usar nomes dos containers
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-cnpj_platform}
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+    ports:
+      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: Dados_RFB
-      DB_USER: ${DB_USER:-rfb_user}
-      DB_PASSWORD: ${DB_PASSWORD:-rfb_password}
-      OUTPUT_FILES_PATH: /app/data/downloads
-      EXTRACTED_FILES_PATH: /app/data/extracted
-      CHUNK_SIZE: ${CHUNK_SIZE:-4096}
-      BATCH_SIZE: ${BATCH_SIZE:-2000000}
-      MAX_WORKERS: ${MAX_WORKERS:-4}
+      redis:
+        condition: service_healthy
     volumes:
-      - etl_downloads:/app/data/downloads
-      - etl_extracted:/app/data/extracted
-      - etl_logs:/app/logs
-      - ./code:/app/code:ro
-    restart: "no"
-    profiles:
-      - etl
+      - exports:/app/exports
+      - downloads:/app/downloads
+      - extracted:/app/extracted
 
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: rfb_pgadmin
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
-      PGADMIN_CONFIG_SERVER_MODE: 'False'
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    ports:
-      - "${PGADMIN_PORT:-8080}:80"
-    depends_on:
-      - postgres
+  # ── Frontend (React SPA) ──
+  frontend:
+    build:
+      context: ./frontend
     restart: unless-stopped
-    profiles:
-      - admin
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
 
 volumes:
-  postgres_data:
-    driver: local
-  etl_downloads:
-    driver: local
-  etl_extracted:
-    driver: local
-  etl_logs:
-    driver: local
-  pgadmin_data:
-    driver: local
-
-networks:
-  default:
-    name: rfb_network
-    driver: bridge
+  pgdata:
+  exports:
+  downloads:
+  extracted:
