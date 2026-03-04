@@ -76,7 +76,7 @@ O ETL desta plataforma foi baseado no repositório [Receita Federal do Brasil - 
 
 ```bash
 # Clone o repositório
-git clone https://github.com/seu-usuario/entity.git
+git clone https://github.com/igaralead/entity.git
 cd entity
 
 # Configure as variáveis de ambiente
