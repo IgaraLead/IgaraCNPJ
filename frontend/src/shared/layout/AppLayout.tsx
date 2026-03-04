@@ -40,6 +40,13 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem("sidebar_collapsed") === "true"; } catch { return false; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem("sidebar_collapsed", String(collapsed)); } catch {}
+  }, [collapsed]);
 
   useEffect(() => {
     fetchUser();
@@ -64,7 +71,9 @@ export default function AppLayout() {
     return <Navigate to="/login" replace />;
   }
 
-  const items = user.role === "super_admin" ? [...navItems, ...adminItems] : navItems;
+  const items = ["admin", "super_admin"].includes(user.role) ? [...navItems, ...adminItems] : navItems;
+
+  const sidebarWidth = collapsed ? 68 : 260;
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
@@ -80,13 +89,13 @@ export default function AppLayout() {
       <aside
         className={`sidebar ${sidebarOpen ? "open" : ""}`}
         style={{
-          width: 260,
-          minWidth: 260,
+          width: sidebarWidth,
+          minWidth: sidebarWidth,
           position: "fixed",
           top: 0,
           left: 0,
           bottom: 0,
-          padding: "1.5rem 1rem",
+          padding: collapsed ? "1.5rem 0.5rem" : "1.5rem 1rem",
           display: "flex",
           flexDirection: "column",
           gap: "0.25rem",
@@ -97,15 +106,44 @@ export default function AppLayout() {
           WebkitBackdropFilter: "blur(20px)",
           zIndex: 50,
           overflowY: "auto",
+          transition: "width 0.25s ease, min-width 0.25s ease, padding 0.25s ease",
         }}
       >
-        <div style={{ padding: "0.5rem", marginBottom: "1.5rem" }}>
-          <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>
-            <span style={{ background: "linear-gradient(135deg, hsl(268,100%,60%), hsl(213,100%,60%))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Igarateca</span>
-          </h2>
-          <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem", marginTop: "0.25rem" }}>
-            {user.plano ? `Plano: ${user.plano}` : "Plano gratuito"}
-          </p>
+        <div style={{ padding: collapsed ? "0.5rem 0" : "0.5rem", marginBottom: "1.5rem", display: "flex", alignItems: "center", justifyContent: collapsed ? "center" : "space-between" }}>
+          {!collapsed && (
+            <div>
+              <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>
+                <span style={{ background: "linear-gradient(135deg, hsl(268,100%,60%), hsl(213,100%,60%))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Igarateca</span>
+              </h2>
+              <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem", marginTop: "0.25rem" }}>
+                {user.plano ? `Plano: ${user.plano.charAt(0).toUpperCase() + user.plano.slice(1)}` : "Plano gratuito"}
+              </p>
+            </div>
+          )}
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            title={collapsed ? "Expandir menu" : "Recolher menu"}
+            style={{
+              background: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(45,56,71,0.5)",
+              borderRadius: "8px",
+              color: "rgba(255,255,255,0.6)",
+              cursor: "pointer",
+              padding: "0.35rem",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "all 0.2s",
+              flexShrink: 0,
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {collapsed
+                ? <><polyline points="9 18 15 12 9 6" /></>
+                : <><polyline points="15 18 9 12 15 6" /></>
+              }
+            </svg>
+          </button>
         </div>
 
         <nav style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
@@ -114,11 +152,13 @@ export default function AppLayout() {
               key={item.to}
               to={item.to}
               className="sidebar-nav-btn"
+              title={collapsed ? item.label : undefined}
               style={({ isActive }) => ({
                 display: "flex",
                 alignItems: "center",
-                gap: "0.75rem",
-                padding: "0.65rem 0.85rem",
+                gap: collapsed ? 0 : "0.75rem",
+                justifyContent: collapsed ? "center" : "flex-start",
+                padding: collapsed ? "0.65rem" : "0.65rem 0.85rem",
                 borderRadius: "10px",
                 textDecoration: "none",
                 color: isActive ? "#fff" : "rgba(255,255,255,0.55)",
@@ -137,32 +177,69 @@ export default function AppLayout() {
               })}
             >
               <NavIcon name={item.icon} />
-              {item.label}
+              {!collapsed && item.label}
             </NavLink>
           ))}
         </nav>
 
         <div style={{ borderTop: "1px solid rgba(45,56,71,0.5)", paddingTop: "1rem" }}>
-          <div style={{ padding: "0.5rem 0.75rem", marginBottom: "0.5rem" }}>
-            <p style={{ color: "#fff", fontSize: "0.875rem", fontWeight: 500 }}>{user.nome}</p>
-            <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.75rem" }}>{user.email}</p>
-            <p style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.75rem", marginTop: "0.25rem" }}>
-              Créditos: <strong style={{ color: "#fff" }}>{user.saldo_creditos.toLocaleString("pt-BR")}</strong>
-            </p>
-          </div>
-          <button
-            className="btn btn-ghost"
-            style={{ width: "100%", justifyContent: "center" }}
-            onClick={() => logout().then(() => navigate("/login"))}
-          >
-            Sair
-          </button>
+          {!collapsed ? (
+            <>
+              <div style={{ padding: "0.5rem 0.75rem", marginBottom: "0.5rem" }}>
+                <p style={{ color: "#fff", fontSize: "0.875rem", fontWeight: 500 }}>{user.nome}</p>
+                <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.75rem" }}>{user.email}</p>
+                <p style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.75rem", marginTop: "0.25rem" }}>
+                  Créditos: <strong style={{ color: "#fff" }}>{user.saldo_creditos.toLocaleString("pt-BR")}</strong>
+                </p>
+              </div>
+              <button
+                className="btn btn-ghost"
+                style={{ width: "100%", justifyContent: "center" }}
+                onClick={() => logout().then(() => navigate("/login"))}
+              >
+                Sair
+              </button>
+            </>
+          ) : (
+            <button
+              className="btn btn-ghost"
+              style={{ width: "100%", justifyContent: "center", padding: "0.5rem" }}
+              title={`${user.nome} · ${user.saldo_creditos} créditos`}
+              onClick={() => logout().then(() => navigate("/login"))}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </button>
+          )}
         </div>
       </aside>
 
       {/* Main content – offset by sidebar width, independently scrollable */}
-      <main style={{ flex: 1, marginLeft: 260, minHeight: "100vh", overflowY: "auto" }}>
-        <Outlet />
+      <main style={{ flex: 1, marginLeft: sidebarWidth, minHeight: "100vh", overflowY: "auto", display: "flex", flexDirection: "column", transition: "margin-left 0.25s ease" }}>
+        <div style={{ flex: 1 }}>
+          <Outlet />
+        </div>
+        <footer style={{
+          padding: "1rem 2rem",
+          textAlign: "center",
+          color: "rgba(255,255,255,0.35)",
+          fontSize: "0.75rem",
+          borderTop: "1px solid rgba(45,56,71,0.3)",
+        }}>
+          © {new Date().getFullYear()}{" "}
+          <a
+            href="https://igaralead.com.br"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "rgba(255,255,255,0.55)", textDecoration: "none", fontWeight: 500 }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "#fff")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(255,255,255,0.55)")}
+          >
+            IgaraLead
+          </a>
+          . Todos os direitos reservados.
+        </footer>
       </main>
     </div>
   );

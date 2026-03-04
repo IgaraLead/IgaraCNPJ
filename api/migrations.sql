@@ -42,9 +42,11 @@ CREATE TABLE IF NOT EXISTS assinaturas (
     id SERIAL PRIMARY KEY,
     usuario_id INT UNIQUE NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
     plano VARCHAR(30) NOT NULL,  -- basico, profissional, negocios, corporativo, enterprise
-    status VARCHAR(20) DEFAULT 'ativa',  -- ativa, cancelada, suspensa
+    status VARCHAR(20) DEFAULT 'ativa',  -- ativa, cancelada, suspensa, substituida
     pagseguro_subscription_id VARCHAR(100),
+    manual BOOLEAN DEFAULT FALSE,
     data_inicio TIMESTAMP DEFAULT NOW(),
+    data_validade TIMESTAMP,  -- null = permanente
     data_proximo_ciclo TIMESTAMP,
     criado_em TIMESTAMP DEFAULT NOW(),
     atualizado_em TIMESTAMP DEFAULT NOW()
@@ -75,11 +77,17 @@ CREATE TABLE IF NOT EXISTS historico_buscas (
     total_results INT DEFAULT 0,
     status VARCHAR(30) DEFAULT 'realizada',
     credits_consumed INT DEFAULT 0,
+    file_id VARCHAR(36),
+    quantidade_processada INT,
     created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_historico_buscas_usuario ON historico_buscas (usuario_id);
 CREATE INDEX IF NOT EXISTS idx_historico_buscas_search_id ON historico_buscas (search_id);
 CREATE INDEX IF NOT EXISTS idx_historico_buscas_created ON historico_buscas (created_at DESC);
+
+-- Add columns if table already exists (idempotent)
+ALTER TABLE historico_buscas ADD COLUMN IF NOT EXISTS file_id VARCHAR(36);
+ALTER TABLE historico_buscas ADD COLUMN IF NOT EXISTS quantidade_processada INT;
 
 
 -- ─── RFB Reference Tables ──────────────────────────────────

@@ -129,6 +129,7 @@ class SearchRequest(BaseModel):
     q: Optional[str] = None
     page: int = 1
     limit: int = 50
+    search_id: Optional[str] = None  # Pass existing search_id to reuse session (pagination)
 
 
 class SearchResult(BaseModel):
@@ -153,6 +154,8 @@ class SearchResult(BaseModel):
     porte_empresa: Optional[int] = None
     data_inicio_atividade: Optional[str] = None
     identificador_matriz_filial: Optional[int] = None
+    municipio_nome: Optional[str] = None
+    socios: Optional[str] = None
 
 
 class SearchResponse(BaseModel):
@@ -206,6 +209,8 @@ class HistoricoBuscaOut(BaseModel):
     total_results: int
     status: str
     credits_consumed: int
+    file_id: Optional[str] = None
+    quantidade_processada: Optional[int] = None
     created_at: datetime
 
     class Config:
@@ -245,3 +250,29 @@ class StatsOut(BaseModel):
     total_consultas: int
     creditos_consumidos_total: int
     fila_tamanho: int
+
+
+# ─── Admin: user management ─────────────────────────────
+
+class AdminCreateUser(BaseModel):
+    nome: str
+    email: EmailStr
+    senha: str
+    role: str = "user"  # user, admin, super_admin
+    telefone: Optional[str] = None
+
+
+class AdminChangeRole(BaseModel):
+    role: str  # user, admin
+
+
+class AdminSetSubscription(BaseModel):
+    plano: str  # basico, profissional, negocios, corporativo, enterprise
+    permanente: bool = False  # True = sem validade
+    dias_validade: Optional[int] = None  # only when permanente=False
+    creditos: Optional[int] = None  # optional: grant credits too
+
+
+class CnaeItem(BaseModel):
+    codigo: str
+    descricao: str

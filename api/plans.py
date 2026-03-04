@@ -67,21 +67,42 @@ def create_subscription(
     plan = PLANS[data.plano]
     now = datetime.now(timezone.utc)
 
-    # Create subscription with status "pendente" — will become "ativa" only after payment
+    # Check if PagSeguro is configured
+    pagseguro_configured = bool(PAGSEGURO_EMAIL and PAGSEGURO_TOKEN)
+
+    # When PagSeguro is not configured (dev/self-hosted), auto-activate
+    initial_status = "pendente" if pagseguro_configured else "ativa"
+
     assinatura = Assinatura(
         usuario_id=current_user.id,
         plano=data.plano,
-        status="pendente",
+        status=initial_status,
         data_inicio=now,
     )
     db.add(assinatura)
     db.flush()  # get assinatura.id
 
-    # Ensure credit row exists (but do NOT add credits yet)
+    # Ensure credit row exists
     credito = db.query(Credito).filter(Credito.usuario_id == current_user.id).first()
     if not credito:
         credito = Credito(usuario_id=current_user.id, saldo=0)
         db.add(credito)
+
+    # When auto-activated, grant credits immediately
+    if not pagseguro_configured:
+        new_saldo = min(credito.saldo + plan.credits, LIMITE_CREDITOS_MAXIMO)
+        added = new_saldo - credito.saldo
+        credito.saldo = new_saldo
+        credito.creditos_recebidos += added
+        credito.updated_at = now
+
+        transacao = CreditoTransacao(
+            usuario_id=current_user.id,
+            tipo="recebimento_mensal",
+            quantidade=added,
+            motivo=f"Ativação plano {data.plano} (auto)",
+        )
+        db.add(transacao)
 
     log = LogAcao(
         usuario_id=current_user.id,
@@ -121,6 +142,15 @@ def create_subscription(
     except Exception as e:
         logger.error(f"PagSeguro API error: {e}")
         checkout_url = f"https://pagseguro.uol.com.br/v2/pre-approvals/request.html?reference=sub_{assinatura.id}"
+
+    # Skip PagSeguro redirect when auto-activated
+    if not pagseguro_configured:
+        return {
+            "id": assinatura.id,
+            "plano": assinatura.plano,
+            "status": assinatura.status,
+            "checkout_url": "",
+        }
 
     return {
         "id": assinatura.id,

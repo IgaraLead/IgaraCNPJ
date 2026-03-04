@@ -41,7 +41,7 @@ export default function DashboardPage() {
       {/* Stats Cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem", marginBottom: "2rem" }}>
         <StatCard label="Créditos Disponíveis" value={credits?.saldo?.toLocaleString("pt-BR") ?? "0"} icon="💰" />
-        <StatCard label="Plano Atual" value={user?.plano ?? "Gratuito"} icon="💎" />
+        <StatCard label="Plano Atual" value={user?.plano ? user.plano.charAt(0).toUpperCase() + user.plano.slice(1) : "Gratuito"} icon="💎" />
         <StatCard label="Créditos Consumidos" value={credits?.creditos_consumidos?.toLocaleString("pt-BR") ?? "0"} icon="📉" />
         <StatCard label="Status Assinatura" value={user?.status_assinatura ?? "—"} icon="✅" />
       </div>

@@ -121,6 +121,20 @@ class DatabaseManager:
             if conn:
                 conn.close()
 
+    # Primary key / conflict columns for upsert operations
+    _CONFLICT_KEYS = {
+        "empresa": ["cnpj_basico"],
+        "estabelecimento": ["cnpj_basico", "cnpj_ordem", "cnpj_dv"],
+        "simples": ["cnpj_basico"],
+        "cnae": ["codigo"],
+        "moti": ["codigo"],
+        "munic": ["codigo"],
+        "natju": ["codigo"],
+        "pais": ["codigo"],
+        "quals": ["codigo"],
+        # socios has no unique key — handled via delete+insert
+    }
+
     def optimized_bulk_insert(
         self,
         dataframe: pd.DataFrame,
@@ -129,7 +143,11 @@ class DatabaseManager:
         create_table: bool = True,
     ) -> None:
         """
-        Optimized bulk insert method for large datasets using COPY with progress tracking.
+        Upsert-based bulk insert: loads data into a temp staging table via COPY,
+        then merges into the real table with INSERT ... ON CONFLICT DO UPDATE.
+        For tables without a unique key (socios), deletes existing rows for
+        the affected cnpj_basico values first.
+        Existing data is preserved; only matching rows are updated.
         """
         if dataframe.empty:
             self._logger.warning(f"Empty dataframe provided for table {table_name}")
@@ -137,15 +155,14 @@ class DatabaseManager:
 
         total_rows = len(dataframe)
         self._logger.info(
-            f"Starting optimized bulk insert of {total_rows:,} rows into {table_name}"
+            f"Starting upsert bulk insert of {total_rows:,} rows into {table_name}"
         )
 
         # Get table schema
         schema = self._get_table_schema(table_name)
 
-        # Create table with optimizations
-        if create_table:
-            self.create_table_with_schema(table_name, schema)
+        # Ensure the target table exists (never drop)
+        self._ensure_table_exists(table_name, schema)
         self.optimize_table_for_bulk_insert(table_name)
 
         # Start progress tracking
@@ -153,6 +170,10 @@ class DatabaseManager:
 
         start_time = time.time()
         processed_rows = 0
+
+        conflict_keys = self._CONFLICT_KEYS.get(table_name)
+        staging_table = f"_staging_{table_name}"
+        columns = list(schema.keys())
 
         try:
             with self.get_connection() as conn:
@@ -236,16 +257,67 @@ class DatabaseManager:
                         output.seek(0)
 
                         try:
+                            # Create temp staging table (unlogged for speed)
+                            cur.execute(f"DROP TABLE IF EXISTS {staging_table}")
+                            cur.execute(
+                                f"CREATE UNLOGGED TABLE {staging_table} "
+                                f"(LIKE {table_name})"
+                            )
+
+                            # COPY into staging
                             cur.copy_from(
                                 output,
-                                table_name,
-                                columns=list(schema.keys()),
+                                staging_table,
+                                columns=columns,
                                 sep="\t",
                                 null="\\N",
                             )
+
+                            # Merge staging → real table
+                            if conflict_keys:
+                                # Upsert: INSERT ... ON CONFLICT DO UPDATE
+                                non_key_cols = [c for c in columns if c not in conflict_keys]
+                                conflict_clause = ", ".join(conflict_keys)
+                                cols_list = ", ".join(columns)
+                                src_cols = ", ".join(f"s.{c}" for c in columns)
+
+                                if non_key_cols:
+                                    update_set = ", ".join(
+                                        f"{c} = EXCLUDED.{c}" for c in non_key_cols
+                                    )
+                                    upsert_sql = (
+                                        f"INSERT INTO {table_name} ({cols_list}) "
+                                        f"SELECT {src_cols} FROM {staging_table} s "
+                                        f"ON CONFLICT ({conflict_clause}) "
+                                        f"DO UPDATE SET {update_set}"
+                                    )
+                                else:
+                                    # All columns are key columns — just ignore dupes
+                                    upsert_sql = (
+                                        f"INSERT INTO {table_name} ({cols_list}) "
+                                        f"SELECT {src_cols} FROM {staging_table} s "
+                                        f"ON CONFLICT ({conflict_clause}) DO NOTHING"
+                                    )
+                                cur.execute(upsert_sql)
+                            else:
+                                # No unique key (e.g. socios): delete old rows for
+                                # affected cnpj_basico values, then insert
+                                cur.execute(
+                                    f"DELETE FROM {table_name} WHERE cnpj_basico IN "
+                                    f"(SELECT DISTINCT cnpj_basico FROM {staging_table})"
+                                )
+                                cols_list = ", ".join(columns)
+                                src_cols = ", ".join(f"s.{c}" for c in columns)
+                                cur.execute(
+                                    f"INSERT INTO {table_name} ({cols_list}) "
+                                    f"SELECT {src_cols} FROM {staging_table} s"
+                                )
+
+                            cur.execute(f"DROP TABLE IF EXISTS {staging_table}")
+
                         except Exception as copy_error:
                             self._logger.error(
-                                f"COPY error for chunk {i//chunk_size + 1}: {copy_error}"
+                                f"COPY/UPSERT error for chunk {i//chunk_size + 1}: {copy_error}"
                             )
                             self._logger.error(f"Schema: {schema}")
                             self._logger.error(f"Schema columns count: {len(schema)}")
@@ -458,6 +530,54 @@ class DatabaseManager:
         }
 
         return schema_mapping.get(table_name, {})
+
+    def _ensure_table_exists(self, table_name: str, schema: Dict[str, str]) -> None:
+        """Create the target table if it doesn't exist yet (never drops).
+        Also ensures the primary key constraint exists for tables that need one."""
+        if not schema:
+            self._logger.error(f"No schema found for table {table_name}")
+            return
+
+        columns_sql = ", ".join([f"{col} {dtype}" for col, dtype in schema.items()])
+
+        # Add primary key constraint for tables that have one
+        pk_cols = self._CONFLICT_KEYS.get(table_name)
+        pk_clause = ""
+        if pk_cols:
+            pk_clause = f", PRIMARY KEY ({', '.join(pk_cols)})"
+
+        create_sql = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            {columns_sql}{pk_clause}
+        )
+        """
+
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(create_sql)
+
+                # If table already existed without the PK, add a unique constraint
+                # so that ON CONFLICT works correctly
+                if pk_cols:
+                    pk_col_list = ", ".join(pk_cols)
+                    constraint_name = f"pk_{table_name}"
+                    cur.execute(
+                        "SELECT 1 FROM information_schema.table_constraints "
+                        "WHERE table_name = %s AND constraint_type IN ('PRIMARY KEY', 'UNIQUE')",
+                        (table_name,),
+                    )
+                    if cur.fetchone() is None:
+                        self._logger.info(
+                            f"Adding PRIMARY KEY constraint on ({pk_col_list}) to {table_name}"
+                        )
+                        cur.execute(
+                            f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} "
+                            f"PRIMARY KEY ({pk_col_list})"
+                        )
+
+                conn.commit()
+
+        self._logger.info(f"Ensured table {table_name} exists")
 
     def create_table_with_schema(self, table_name: str, schema: Dict[str, str]) -> None:
         """Create table with optimized settings for large datasets."""

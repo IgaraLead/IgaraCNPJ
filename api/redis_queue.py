@@ -149,6 +149,41 @@ def etl_progress_clear():
         logger.error(f"Redis etl_progress_clear failed: {e}")
 
 
+# ─── Processing Progress ───────────────────────────────
+
+def set_process_progress(search_id: str, data: dict, ttl: int = 3600):
+    """Store processing progress for a search_id (TTL 1h)."""
+    if not redis_client:
+        return
+    try:
+        redis_client.setex(f"progress:{search_id}", ttl, json.dumps(data))
+    except redis.RedisError as e:
+        logger.error(f"Redis set_process_progress failed: {e}")
+
+
+def get_process_progress(search_id: str) -> Optional[dict]:
+    """Retrieve processing progress for a search_id."""
+    if not redis_client:
+        return None
+    try:
+        raw = redis_client.get(f"progress:{search_id}")
+        if raw:
+            return json.loads(raw)
+    except redis.RedisError as e:
+        logger.error(f"Redis get_process_progress failed: {e}")
+    return None
+
+
+def clear_process_progress(search_id: str):
+    """Remove progress key after processing is done."""
+    if not redis_client:
+        return
+    try:
+        redis_client.delete(f"progress:{search_id}")
+    except redis.RedisError as e:
+        logger.error(f"Redis clear_process_progress failed: {e}")
+
+
 def cache_set(key: str, value: Any, ttl: int = 300):
     """Set a cache entry with TTL (default 5 minutes)."""
     if not redis_client:

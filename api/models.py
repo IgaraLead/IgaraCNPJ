@@ -65,7 +65,9 @@ class Assinatura(Base):
     plano = Column(String(30), nullable=False)  # basico, profissional, negocios, corporativo, enterprise
     status = Column(String(20), default="ativa")  # ativa, cancelada, suspensa
     pagseguro_subscription_id = Column(String(100), nullable=True)
+    manual = Column(Boolean, default=False)  # True if set by admin
     data_inicio = Column(DateTime, default=lambda: datetime.datetime.now(timezone.utc))
+    data_validade = Column(DateTime, nullable=True)  # null = permanente
     data_proximo_ciclo = Column(DateTime, nullable=True)
     criado_em = Column(DateTime, default=lambda: datetime.datetime.now(timezone.utc))
     atualizado_em = Column(DateTime, default=lambda: datetime.datetime.now(timezone.utc), onupdate=lambda: datetime.datetime.now(timezone.utc))
@@ -96,6 +98,8 @@ class HistoricoBusca(Base):
     total_results = Column(Integer, default=0)
     status = Column(String(30), default="realizada")  # realizada, processada, exportada
     credits_consumed = Column(Integer, default=0)
+    file_id = Column(String(36), nullable=True)  # id for downloadable processed files
+    quantidade_processada = Column(Integer, nullable=True)  # how many contacts were processed
     created_at = Column(DateTime, default=lambda: datetime.datetime.now(timezone.utc))
 
     usuario = relationship("Usuario")

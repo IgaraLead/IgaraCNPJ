@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { searchApi, type SearchParams, type SearchResult, type SearchResponse, type Municipio } from "../../shared/api";
+import { searchApi, type SearchParams, type SearchResult, type SearchResponse, type Municipio, type CnaeItem } from "../../shared/api";
 import { useAuth } from "../../shared/store";
 
 const UFS = [
@@ -166,21 +166,207 @@ function MunicipioMultiSelect({
 }
 
 /* ── Process/Credits Modal ───────────────────────── */
+
+/* ── CNAE Multi-select with async search ─────────── */
+function CnaeMultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: CnaeItem[];
+  onChange: (sel: CnaeItem[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<CnaeItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const doSearch = (q: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const data = await searchApi.cnaes(q, 30);
+        setResults(data);
+      } catch {
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
+    }, 250);
+  };
+
+  useEffect(() => {
+    if (open) doSearch(query);
+  }, [open]);
+
+  const handleQueryChange = (val: string) => {
+    setQuery(val);
+    doSearch(val);
+  };
+
+  const toggle = (item: CnaeItem) => {
+    if (selected.find((s) => s.codigo === item.codigo)) {
+      onChange(selected.filter((s) => s.codigo !== item.codigo));
+    } else {
+      onChange([...selected, item]);
+    }
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <div
+        className="input"
+        style={{
+          minHeight: 38,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "0.25rem",
+          cursor: "pointer",
+          alignItems: "center",
+          padding: "0.375rem 0.625rem",
+        }}
+        onClick={() => setOpen(!open)}
+      >
+        {selected.length === 0 && (
+          <span style={{ color: "var(--text-light)", fontSize: "0.875rem" }}>
+            Buscar por código ou descrição
+          </span>
+        )}
+        {selected.map((c) => (
+          <span
+            key={c.codigo}
+            style={{
+              background: "rgba(0,112,255,0.2)",
+              color: "#fff",
+              borderRadius: 6,
+              padding: "0.15rem 0.5rem",
+              fontSize: "0.75rem",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.25rem",
+            }}
+          >
+            {c.codigo}
+            <span
+              style={{ cursor: "pointer", fontWeight: 700, marginLeft: 2 }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onChange(selected.filter((s) => s.codigo !== c.codigo));
+              }}
+            >
+              ×
+            </span>
+          </span>
+        ))}
+      </div>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 0,
+            zIndex: 50,
+            background: "rgba(26,31,46,0.97)",
+            border: "1px solid var(--glass-border)",
+            borderRadius: "var(--radius-sm)",
+            maxHeight: 260,
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+          }}
+        >
+          <input
+            className="input"
+            placeholder="Código ou descrição do CNAE..."
+            value={query}
+            onChange={(e) => handleQueryChange(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            style={{ borderRadius: 0, borderBottom: "1px solid var(--glass-border)", flexShrink: 0 }}
+            autoFocus
+          />
+          <div style={{ overflowY: "auto", flex: 1 }}>
+            {loading && (
+              <div style={{ padding: "0.75rem", color: "var(--text-light)", fontSize: "0.8rem" }}>
+                Buscando...
+              </div>
+            )}
+            {!loading && results.length === 0 && query && (
+              <div style={{ padding: "0.75rem", color: "var(--text-light)", fontSize: "0.8rem" }}>
+                Nenhum CNAE encontrado
+              </div>
+            )}
+            {!loading && results.map((item) => {
+              const isSelected = !!selected.find((s) => s.codigo === item.codigo);
+              return (
+                <div
+                  key={item.codigo}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggle(item);
+                  }}
+                  style={{
+                    padding: "0.5rem 0.75rem",
+                    fontSize: "0.8rem",
+                    color: isSelected ? "#fff" : "var(--text-muted)",
+                    background: isSelected ? "rgba(0,112,255,0.15)" : "transparent",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                  }}
+                >
+                  <span style={{
+                    width: 14, height: 14, borderRadius: 3,
+                    border: isSelected ? "none" : "1px solid var(--border-subtle)",
+                    background: isSelected ? "var(--primary)" : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "0.65rem", color: "#fff", flexShrink: 0,
+                  }}>
+                    {isSelected && "✓"}
+                  </span>
+                  <span style={{ color: "rgba(255,255,255,0.5)", minWidth: 65, fontFamily: "monospace", fontSize: "0.75rem" }}>
+                    {item.codigo}
+                  </span>
+                  <span style={{ flex: 1 }}>{item.descricao}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Process/Credits Modal ───────────────────────── */
 function ProcessModal({
   total,
   onProcess,
-  onExport,
   onClose,
   processing,
+  submitted,
 }: {
   total: number;
   onProcess: (qty: number) => void;
-  onExport: (fmt: "csv" | "xlsx") => void;
   onClose: () => void;
   processing: boolean;
+  submitted: boolean;
 }) {
   const [quantidade, setQuantidade] = useState(Math.min(total, 100));
   const maxAllowed = Math.min(total, 50000);
+  const navigate = useNavigate();
 
   return (
     <div style={{
@@ -193,62 +379,79 @@ function ProcessModal({
         style={{ padding: "2rem", maxWidth: 440, width: "90%", animation: "fadeIn 0.2s ease-out" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 style={{ color: "#fff", fontSize: "1.1rem", marginBottom: "1rem" }}>
-          Processar Contatos
-        </h3>
-        <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginBottom: "1.25rem" }}>
-          Foram encontrados <strong style={{ color: "#fff" }}>{total.toLocaleString("pt-BR")}</strong> resultados.
-          Informe quantos contatos deseja processar.
-        </p>
+        {!submitted ? (
+          <>
+            <h3 style={{ color: "#fff", fontSize: "1.1rem", marginBottom: "1rem" }}>
+              Processar Contatos
+            </h3>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginBottom: "1.25rem" }}>
+              Foram encontrados <strong style={{ color: "#fff" }}>{total.toLocaleString("pt-BR")}</strong> resultados.
+              Informe quantos contatos deseja processar.
+            </p>
 
-        <div style={{ marginBottom: "1rem" }}>
-          <label style={labelStyle}>Quantidade de contatos</label>
-          <input
-            className="input"
-            type="number"
-            min={1}
-            max={maxAllowed}
-            value={quantidade}
-            onChange={(e) => setQuantidade(Math.max(1, Math.min(maxAllowed, parseInt(e.target.value) || 1)))}
-          />
-          <p style={{ color: "var(--text-light)", fontSize: "0.75rem", marginTop: "0.25rem" }}>
-            Custo: <strong style={{ color: "#fff" }}>{quantidade.toLocaleString("pt-BR")}</strong> créditos
-            (1 crédito por CNPJ)
-          </p>
-        </div>
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={labelStyle}>Quantidade de contatos</label>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={maxAllowed}
+                value={quantidade}
+                onChange={(e) => setQuantidade(Math.max(1, Math.min(maxAllowed, parseInt(e.target.value) || 1)))}
+              />
+              <p style={{ color: "var(--text-light)", fontSize: "0.75rem", marginTop: "0.25rem" }}>
+                Custo: <strong style={{ color: "#fff" }}>{quantidade.toLocaleString("pt-BR")}</strong> créditos
+                (1 crédito por CNPJ · cobrados após processamento)
+              </p>
+            </div>
 
-        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-          <button
-            className="btn btn-primary"
-            style={{ flex: 1 }}
-            disabled={processing}
-            onClick={() => onProcess(quantidade)}
-          >
-            {processing ? "Processando..." : `Processar (${quantidade} créditos)`}
-          </button>
-        </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+                disabled={processing}
+                onClick={() => onProcess(quantidade)}
+              >
+                {processing ? "Enviando..." : `Processar (${quantidade} créditos)`}
+              </button>
+            </div>
 
-        <div style={{ borderTop: "1px solid var(--glass-border)", paddingTop: "1rem" }}>
-          <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", marginBottom: "0.75rem" }}>
-            Exportar resultados (custo adicional: <strong style={{ color: "#fff" }}>10 créditos</strong>)
-          </p>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button className="btn btn-ghost" style={{ flex: 1 }} disabled={processing} onClick={() => onExport("csv")}>
-              Exportar CSV
+            <button
+              className="btn btn-ghost"
+              style={{ width: "100%", marginTop: "1rem", justifyContent: "center" }}
+              onClick={onClose}
+            >
+              Cancelar
             </button>
-            <button className="btn btn-ghost" style={{ flex: 1 }} disabled={processing} onClick={() => onExport("xlsx")}>
-              Exportar Excel
-            </button>
-          </div>
-        </div>
+          </>
+        ) : (
+          <>
+            <h3 style={{ color: "#fff", fontSize: "1.1rem", marginBottom: "1rem" }}>
+              ✅ Pedido Enviado
+            </h3>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginBottom: "1.25rem" }}>
+              Seu pedido de <strong style={{ color: "#fff" }}>{quantidade.toLocaleString("pt-BR")}</strong> contatos está sendo processado.
+              Os créditos serão debitados somente quando os arquivos estiverem prontos para download no seu <strong style={{ color: "#fff" }}>Histórico</strong>.
+            </p>
 
-        <button
-          className="btn btn-ghost"
-          style={{ width: "100%", marginTop: "1rem", justifyContent: "center" }}
-          onClick={onClose}
-        >
-          Cancelar
-        </button>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+                onClick={() => { onClose(); navigate("/history"); }}
+              >
+                Ir para Histórico
+              </button>
+              <button
+                className="btn btn-ghost"
+                style={{ flex: 1 }}
+                onClick={onClose}
+              >
+                Continuar aqui
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -262,7 +465,7 @@ export default function SearchPage() {
   const navigate = useNavigate();
   const [uf, setUf] = useState("SP");
   const [selectedMunicipios, setSelectedMunicipios] = useState<Municipio[]>([]);
-  const [cnae, setCnae] = useState("");
+  const [selectedCnaes, setSelectedCnaes] = useState<CnaeItem[]>([]);
   const [situacao, setSituacao] = useState("");
   const [porte, setPorte] = useState("");
   const [naturezaJuridica, setNaturezaJuridica] = useState("");
@@ -283,7 +486,7 @@ export default function SearchPage() {
   const [data, setData] = useState<SearchResponse | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showProcessModal, setShowProcessModal] = useState(false);
-  const [processedResults, setProcessedResults] = useState<SearchResult[] | null>(null);
+  const [processSubmitted, setProcessSubmitted] = useState(false);
   const historyLoadedRef = useRef(false);
 
   // Fetch municipalities when UF changes
@@ -308,7 +511,7 @@ export default function SearchPage() {
 
     const p = state.params;
     if (p.uf) setUf(p.uf);
-    if (p.cnae) setCnae(p.cnae);
+    if (p.cnae) setSelectedCnaes(p.cnae.split(",").map((c: string) => ({ codigo: c.trim(), descricao: "" })));
     if (p.situacao) setSituacao(p.situacao);
     if (p.porte) setPorte(p.porte);
     if (p.natureza_juridica) setNaturezaJuridica(p.natureza_juridica);
@@ -355,7 +558,6 @@ export default function SearchPage() {
     if (state.mode === "continue") {
       searchApi.search(p).then((res) => {
         setData(res);
-        setProcessedResults(null);
       });
     }
 
@@ -368,7 +570,7 @@ export default function SearchPage() {
     if (selectedMunicipios.length > 0) {
       params.municipio = selectedMunicipios.map((m) => m.codigo).join(",");
     }
-    if (cnae) params.cnae = cnae;
+    if (selectedCnaes.length > 0) params.cnae = selectedCnaes.map((c) => c.codigo).join(",");
     if (situacao) params.situacao = situacao;
     if (porte) params.porte = porte;
     if (naturezaJuridica) params.natureza_juridica = naturezaJuridica;
@@ -395,33 +597,20 @@ export default function SearchPage() {
     mutationFn: (params: SearchParams) => searchApi.search(params),
     onSuccess: (res) => {
       setData(res);
-      setProcessedResults(null);
     },
   });
 
   const processMutation = useMutation({
     mutationFn: ({ params, qty }: { params: SearchParams; qty: number }) =>
-      searchApi.process(params, qty),
-    onSuccess: (res) => {
-      setProcessedResults(res.results);
-      setShowProcessModal(false);
-      fetchUser(); // Refresh credit balance
-    },
-  });
-
-  const exportMutation = useMutation({
-    mutationFn: ({ params, formato }: { params: SearchParams; formato: "csv" | "xlsx" }) =>
-      searchApi.exportWithCredits(params, formato),
-    onSuccess: (res) => {
-      setShowProcessModal(false);
-      fetchUser();
-      alert(`Exportação iniciada! Task ID: ${res.task_id}\nCréditos consumidos: ${res.credits_consumed}`);
+      searchApi.process(params, qty, data?.search_id),
+    onSuccess: () => {
+      setProcessSubmitted(true);
     },
   });
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setProcessedResults(null);
+    // New search = new session (no search_id passed → backend creates new entry)
     searchMutation.mutate(buildParams());
   };
 
@@ -429,22 +618,51 @@ export default function SearchPage() {
     processMutation.mutate({ params: buildParams(), qty });
   };
 
-  const handleExport = (formato: "csv" | "xlsx") => {
-    exportMutation.mutate({ params: buildParams(), formato });
-  };
-
   const activeFilterCount = [
-    selectedMunicipios.length > 0 ? "x" : "", cnae, situacao, porte,
+    selectedMunicipios.length > 0 ? "x" : "", selectedCnaes.length > 0 ? "x" : "", situacao, porte,
     naturezaJuridica, cep, bairro, logradouro, matrizFilial, capitalMin,
     capitalMax, dataAberturaInicio, dataAberturaFim, ddd, comEmail,
     comTelefone, simples, mei, q,
   ].filter(Boolean).length;
 
-  const previewResults = processedResults || (data?.results ?? []);
+  const previewResults = data?.results ?? [];
 
   return (
     <div className="page animate-in">
       <h1 className="page-title">Consultas</h1>
+
+      {/* Plan required gate */}
+      {user?.status_assinatura !== "ativa" ? (
+        <div className="glass-strong" style={{ padding: "3rem 2rem", textAlign: "center" }}>
+          <div style={{ marginBottom: "1.5rem" }}>
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto" }}>
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+          </div>
+          <h2 style={{ color: "#fff", fontSize: "1.5rem", fontWeight: 700, marginBottom: "0.75rem" }}>
+            Assine um plano para consultar
+          </h2>
+          <p style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.95rem", maxWidth: 480, margin: "0 auto 2rem" }}>
+            Para realizar consultas e acessar os dados de empresas, você precisa ter um plano ativo.
+            Escolha o plano ideal para o seu negócio e comece a consultar agora.
+          </p>
+          <button
+            className="btn btn-primary"
+            style={{ fontSize: "1rem", padding: "0.75rem 2rem" }}
+            onClick={() => navigate("/plans")}
+          >
+            Ver Planos Disponíveis
+          </button>
+          {user?.saldo_creditos > 0 && (
+            <p style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.8rem", marginTop: "1rem" }}>
+              Você tem {user.saldo_creditos.toLocaleString("pt-BR")} créditos que ficarão disponíveis
+              após a ativação de um plano.
+            </p>
+          )}
+        </div>
+      ) : (
+      <>
 
       {/* Filters */}
       <div className="glass-strong" style={{ padding: "1.5rem", marginBottom: "1.5rem" }}>
@@ -466,9 +684,9 @@ export default function SearchPage() {
                 loading={municipiosQuery.isLoading}
               />
             </div>
-            <div>
+            <div style={{ gridColumn: "span 2" }}>
               <label style={labelStyle}>CNAE</label>
-              <input className="input" value={cnae} onChange={(e) => setCnae(e.target.value)} placeholder="Ex: 6201501" />
+              <CnaeMultiSelect selected={selectedCnaes} onChange={setSelectedCnaes} />
             </div>
             <div>
               <label style={labelStyle}>Situação</label>
@@ -627,16 +845,9 @@ export default function SearchPage() {
               <span style={{ color: "#fff", fontWeight: 600, fontSize: "1.1rem" }}>
                 {data.total.toLocaleString("pt-BR")} resultados encontrados
               </span>
-              {!processedResults && (
-                <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", marginTop: "0.25rem" }}>
-                  Exibindo amostra de {data.results.length} resultados. Processe para acessar todos os dados.
-                </p>
-              )}
-              {processedResults && (
-                <p style={{ color: "var(--success)", fontSize: "0.8rem", marginTop: "0.25rem" }}>
-                  {processedResults.length.toLocaleString("pt-BR")} contatos processados com sucesso.
-                </p>
-              )}
+              <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", marginTop: "0.25rem" }}>
+                Exibindo amostra de {data.results.length} resultados. Processe para acessar todos os dados.
+              </p>
             </div>
             <button
               className="btn btn-primary"
@@ -694,10 +905,12 @@ export default function SearchPage() {
         <ProcessModal
           total={data.total}
           onProcess={handleProcess}
-          onExport={handleExport}
-          onClose={() => setShowProcessModal(false)}
-          processing={processMutation.isPending || exportMutation.isPending}
+          onClose={() => { setShowProcessModal(false); setProcessSubmitted(false); }}
+          processing={processMutation.isPending}
+          submitted={processSubmitted}
         />
+      )}
+      </>
       )}
     </div>
   );

@@ -23,7 +23,6 @@ export const useAuth = create<AuthState>((set) => ({
   error: null,
 
   fetchUser: async () => {
-    set({ loading: true, error: null });
     try {
       const user = await authApi.me();
       set({ user, loading: false });

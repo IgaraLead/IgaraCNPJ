@@ -280,24 +280,17 @@ class ETLOrchestrator:
         processor = ProcessorFactory.get_processor(file_type)
         processing_start = time.time()
 
-        is_first_chunk = True
         for filename in filenames:
             file_path = f"{self.config.extracted_files_path}/{filename}"
             self._logger.info(f"Processing file: {filename}")
 
             try:
-                # For large files, use chunked reading
-                self._process_large_file(
-                    file_path, file_type, processor, is_first_chunk
-                )
-
+                self._process_large_file(file_path, file_type, processor)
                 self._logger.info(f"Successfully processed {filename}")
 
             except Exception as e:
                 self._logger.error(f"Error processing {filename}: {e}")
                 raise
-            finally:
-                is_first_chunk = False
 
         processing_end = time.time()
         processing_time = processing_end - processing_start
@@ -307,20 +300,17 @@ class ETLOrchestrator:
         )
 
     def _process_large_file(
-        self, file_path: str, table_name: str, processor, is_first_chunk: bool
+        self, file_path: str, table_name: str, processor
     ) -> None:
         """
-        Process large files using chunked reading and insertion.
+        Process large files using chunked reading and upsert insertion.
         """
         chunk_count = 0
         for chunk in self.data_reader.read_file_in_chunks(file_path, processor):
-            should_create_table = is_first_chunk and chunk_count == 0
-            # For the first chunk, replace the table
             self.database_manager.optimized_bulk_insert(
                 chunk,
                 table_name,
                 self.config.chunk_size,
-                create_table=should_create_table,
             )
 
             chunk_count += 1

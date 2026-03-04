@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .database import engine, Base
+from .database import engine, Base, SessionLocal
 from .auth import router as auth_router
 from .plans import router as plans_router
 from .credits import router as credits_router
@@ -32,12 +32,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _run_column_migrations():
+    """Add columns that may be missing on existing tables (idempotent)."""
+    from sqlalchemy import text
+    stmts = [
+        "ALTER TABLE historico_buscas ADD COLUMN IF NOT EXISTS file_id VARCHAR(36)",
+        "ALTER TABLE historico_buscas ADD COLUMN IF NOT EXISTS quantidade_processada INT",
+    ]
+    db = SessionLocal()
+    try:
+        for sql in stmts:
+            db.execute(text(sql))
+        db.commit()
+        logger.info("Column migrations applied successfully.")
+    except Exception as e:
+        db.rollback()
+        logger.warning("Column migrations skipped (table may not exist yet): %s", e)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     logger.info("Starting CNPJ Platform API...")
     # Create tables if they don't exist (dev convenience)
     Base.metadata.create_all(bind=engine)
+    # Add columns that may be missing on existing tables (idempotent)
+    _run_column_migrations()
     create_first_superadmin()
     logger.info("API ready.")
     yield

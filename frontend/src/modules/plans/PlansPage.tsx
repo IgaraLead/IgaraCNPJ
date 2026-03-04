@@ -15,6 +15,7 @@ export default function PlansPage() {
         window.location.href = data.checkout_url;
         return;
       }
+      // Auto-activated (no PagSeguro) — just refresh user state
       fetchUser();
       queryClient.invalidateQueries({ queryKey: ["credits"] });
     },

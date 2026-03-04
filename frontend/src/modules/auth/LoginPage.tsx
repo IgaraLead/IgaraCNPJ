@@ -81,6 +81,28 @@ export default function LoginPage() {
           <Link to="/register" style={{ color: "hsl(213,100%,60%)", textDecoration: "none", fontWeight: 500 }}>Criar conta</Link>
         </p>
       </div>
+
+      <footer style={{
+        position: "fixed",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        padding: "1rem",
+        textAlign: "center",
+        color: "rgba(255,255,255,0.35)",
+        fontSize: "0.75rem",
+      }}>
+        © {new Date().getFullYear()}{" "}
+        <a
+          href="https://igaralead.com.br"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: "rgba(255,255,255,0.55)", textDecoration: "none", fontWeight: 500 }}
+        >
+          IgaraLead
+        </a>
+        . Todos os direitos reservados.
+      </footer>
     </div>
   );
 }

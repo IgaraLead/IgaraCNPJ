@@ -11,7 +11,7 @@ import time as _time
 from typing import List
 
 import redis
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -20,10 +20,11 @@ from .database import get_db
 from .auth import require_super_admin, get_current_user
 from .models import (
     Usuario, Credito, CreditoTransacao, Assinatura,
-    LogAcao, ConfigSistema,
+    LogAcao, ConfigSistema, HistoricoBusca,
 )
 from .schemas import (
     AjusteCreditos, ToggleUF, ToggleQueue, LogAcaoOut, StatsOut,
+    AdminCreateUser, AdminChangeRole, AdminSetSubscription,
 )
 from .redis_queue import (
     redis_client, get_queue_size, cache_clear_all,
@@ -34,6 +35,7 @@ from .redis_queue import (
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 LIMITE_CREDITOS_MAXIMO = int(os.getenv("LIMITE_CREDITOS_MAXIMO", "100000"))
+ENV_ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@seudominio.com")
 
 
 @router.get("/stats", response_model=StatsOut)
@@ -227,8 +229,8 @@ def block_user(
     user = db.query(Usuario).filter(Usuario.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
-    if user.role == "super_admin":
-        raise HTTPException(status_code=400, detail="Não é possível bloquear um super-admin")
+    if user.role == "super_admin" or user.email == ENV_ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Não é possível bloquear esta conta")
 
     user.ativo = not user.ativo
 
@@ -256,21 +258,208 @@ def list_users(
     users = db.query(Usuario).offset(offset).limit(limit).all()
     total = db.query(func.count(Usuario.id)).scalar()
 
+    # Batch-load subscriptions and credits to avoid N+1 queries
+    user_ids = [u.id for u in users]
+    assinaturas = db.query(Assinatura).filter(
+        Assinatura.usuario_id.in_(user_ids),
+        Assinatura.status == "ativa",
+    ).all()
+    assinatura_map = {a.usuario_id: a for a in assinaturas}
+    creditos = db.query(Credito).filter(Credito.usuario_id.in_(user_ids)).all()
+    credito_map = {c.usuario_id: c for c in creditos}
+
+    result = []
+    for u in users:
+        assinatura = assinatura_map.get(u.id)
+        credito = credito_map.get(u.id)
+        result.append({
+            "id": u.id,
+            "nome": u.nome,
+            "email": u.email,
+            "role": u.role,
+            "ativo": u.ativo,
+            "criado_em": str(u.criado_em),
+            "plano": assinatura.plano if assinatura else None,
+            "plano_permanente": assinatura.data_validade is None if assinatura else None,
+            "plano_validade": str(assinatura.data_validade) if assinatura and assinatura.data_validade else None,
+            "plano_manual": assinatura.manual if assinatura else False,
+            "saldo_creditos": credito.saldo if credito else 0,
+            "is_env_admin": u.email == ENV_ADMIN_EMAIL,
+        })
+
     return {
-        "users": [
-            {
-                "id": u.id,
-                "nome": u.nome,
-                "email": u.email,
-                "role": u.role,
-                "ativo": u.ativo,
-                "criado_em": str(u.criado_em),
-            }
-            for u in users
-        ],
+        "users": result,
         "total": total,
         "page": page,
         "limit": limit,
+    }
+
+
+@router.post("/users/create")
+def create_user(
+    data: AdminCreateUser,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_super_admin),
+):
+    """Create a new user account (admin-only)."""
+    from .auth import hash_password
+
+    if data.role not in ("user", "admin"):
+        raise HTTPException(status_code=400, detail="Role deve ser 'user' ou 'admin'")
+
+    existing = db.query(Usuario).filter(Usuario.email == data.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email já cadastrado")
+
+    new_user = Usuario(
+        nome=data.nome,
+        email=data.email,
+        senha_hash=hash_password(data.senha),
+        telefone=data.telefone,
+        role=data.role,
+        ativo=True,
+    )
+    db.add(new_user)
+    db.flush()
+
+    credito = Credito(usuario_id=new_user.id, saldo=0)
+    db.add(credito)
+
+    log = LogAcao(
+        usuario_id=admin.id,
+        acao="admin_create_user",
+        detalhes={"new_user_id": new_user.id, "email": data.email, "role": data.role},
+        ip_address=request.client.host if request.client else None,
+    )
+    db.add(log)
+    db.commit()
+
+    return {"id": new_user.id, "email": new_user.email, "role": new_user.role}
+
+
+@router.post("/users/{user_id}/role")
+def change_user_role(
+    user_id: int,
+    data: AdminChangeRole,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_super_admin),
+):
+    """Change a user's role. Cannot change the env-configured admin."""
+    if data.role not in ("user", "admin"):
+        raise HTTPException(status_code=400, detail="Role deve ser 'user' ou 'admin'")
+
+    user = db.query(Usuario).filter(Usuario.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    if user.email == ENV_ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Não é possível alterar o nível da conta administrativa principal")
+
+    if user.role == "super_admin":
+        raise HTTPException(status_code=403, detail="Não é possível alterar o nível de um super-admin")
+
+    user.role = data.role
+
+    log = LogAcao(
+        usuario_id=admin.id,
+        acao="change_role",
+        detalhes={"user_id": user_id, "new_role": data.role},
+        ip_address=request.client.host if request.client else None,
+    )
+    db.add(log)
+    db.commit()
+
+    return {"user_id": user_id, "role": user.role}
+
+
+@router.post("/users/{user_id}/subscription")
+def set_user_subscription(
+    user_id: int,
+    data: AdminSetSubscription,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_super_admin),
+):
+    """Manually set a user's subscription plan with optional expiry."""
+    from .plans import PLANS
+
+    if data.plano not in PLANS:
+        raise HTTPException(status_code=400, detail="Plano inválido")
+
+    user = db.query(Usuario).filter(Usuario.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    # Deactivate existing active subscription
+    existing = db.query(Assinatura).filter(
+        Assinatura.usuario_id == user_id,
+        Assinatura.status == "ativa",
+    ).first()
+    if existing:
+        existing.status = "substituida"
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    data_validade = None
+    if not data.permanente:
+        if not data.dias_validade or data.dias_validade < 1:
+            raise HTTPException(status_code=400, detail="Informe dias_validade para plano não-permanente")
+        data_validade = now + datetime.timedelta(days=data.dias_validade)
+
+    assinatura = Assinatura(
+        usuario_id=user_id,
+        plano=data.plano,
+        status="ativa",
+        manual=True,
+        data_inicio=now,
+        data_validade=data_validade,
+    )
+    db.add(assinatura)
+
+    # Grant credits if specified
+    credito = db.query(Credito).filter(Credito.usuario_id == user_id).first()
+    if not credito:
+        credito = Credito(usuario_id=user_id, saldo=0)
+        db.add(credito)
+        db.flush()
+
+    if data.creditos and data.creditos > 0:
+        plan_info = PLANS[data.plano]
+        new_saldo = min(credito.saldo + data.creditos, LIMITE_CREDITOS_MAXIMO)
+        added = new_saldo - credito.saldo
+        credito.saldo = new_saldo
+        credito.creditos_recebidos += added
+
+        transacao = CreditoTransacao(
+            usuario_id=user_id,
+            tipo="ajuste_manual",
+            quantidade=added,
+            motivo=f"Ativação manual plano {data.plano} pelo admin",
+            metadata_extra={"admin_id": admin.id},
+        )
+        db.add(transacao)
+
+    log = LogAcao(
+        usuario_id=admin.id,
+        acao="admin_set_subscription",
+        detalhes={
+            "user_id": user_id,
+            "plano": data.plano,
+            "permanente": data.permanente,
+            "dias_validade": data.dias_validade,
+            "creditos": data.creditos,
+        },
+        ip_address=request.client.host if request.client else None,
+    )
+    db.add(log)
+    db.commit()
+
+    return {
+        "user_id": user_id,
+        "plano": data.plano,
+        "permanente": data.permanente,
+        "data_validade": str(data_validade) if data_validade else None,
     }
 
 
@@ -502,3 +691,93 @@ def clear_cache(
     db.commit()
 
     return {"status": "Cache limpo"}
+
+
+# ─── Extraction Lookup ────────────────────────────────────
+
+@router.get("/extractions/{file_id}")
+def get_extraction_by_file_id(
+    file_id: str,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_super_admin),
+):
+    """Look up an extraction (processed search) by its file_id."""
+    historico = db.query(HistoricoBusca).filter(HistoricoBusca.file_id == file_id).first()
+    if not historico:
+        raise HTTPException(status_code=404, detail="Extração não encontrada")
+
+    usuario = db.query(Usuario).filter(Usuario.id == historico.usuario_id).first()
+
+    return {
+        "file_id": historico.file_id,
+        "search_id": historico.search_id,
+        "status": historico.status,
+        "total_results": historico.total_results,
+        "quantidade_processada": historico.quantidade_processada,
+        "credits_consumed": historico.credits_consumed,
+        "created_at": historico.created_at.isoformat() if historico.created_at else None,
+        "params": historico.params,
+        "usuario": {
+            "id": usuario.id,
+            "nome": usuario.nome,
+            "email": usuario.email,
+            "role": usuario.role,
+        } if usuario else None,
+    }
+
+
+@router.get("/extractions")
+def search_extractions(
+    q: str = Query("", description="Search by file_id, search_id or user email"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_super_admin),
+):
+    """List / search all queries (not only processed ones) with pagination."""
+    query = db.query(HistoricoBusca)
+
+    if q:
+        # Try matching file_id, search_id, or join to user email
+        query = query.outerjoin(Usuario, Usuario.id == HistoricoBusca.usuario_id).filter(
+            (HistoricoBusca.file_id.ilike(f"%{q}%"))
+            | (HistoricoBusca.search_id.ilike(f"%{q}%"))
+            | (Usuario.email.ilike(f"%{q}%"))
+            | (Usuario.nome.ilike(f"%{q}%"))
+        )
+
+    total = query.count()
+    items = (
+        query.order_by(HistoricoBusca.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+
+    # Batch-load users to avoid N+1 queries
+    user_ids = list({h.usuario_id for h in items})
+    users_map = {}
+    if user_ids:
+        users = db.query(Usuario).filter(Usuario.id.in_(user_ids)).all()
+        users_map = {u.id: u for u in users}
+
+    results = []
+    for h in items:
+        usuario = users_map.get(h.usuario_id)
+        results.append({
+            "file_id": h.file_id,
+            "search_id": h.search_id,
+            "status": h.status,
+            "total_results": h.total_results,
+            "quantidade_processada": h.quantidade_processada,
+            "credits_consumed": h.credits_consumed,
+            "created_at": h.created_at.isoformat() if h.created_at else None,
+            "params": h.params,
+            "usuario": {
+                "id": usuario.id,
+                "nome": usuario.nome,
+                "email": usuario.email,
+            } if usuario else None,
+        })
+
+    return {"extractions": results, "total": total}

@@ -4,22 +4,31 @@ Consumes credits per result returned.
 """
 
 import os
+import csv
+import io
 import uuid
+import time
+import logging
+import tempfile
 from typing import Optional
 
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from .database import get_db
 from .auth import get_current_user
-from .models import Usuario, Assinatura, HistoricoBusca
+from .models import Usuario, Assinatura, HistoricoBusca, Credito
 from .credits import check_active_subscription, debit_credits
 from .schemas import SearchRequest, SearchResponse, SearchResult, HistoricoBuscaOut
-from .redis_queue import redis_client, enqueue_task
+from .redis_queue import redis_client, enqueue_task, set_task_status, get_task_status, set_process_progress, get_process_progress, clear_process_progress
+from . import storage
 
 router = APIRouter(tags=["search"])
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/search/municipios")
@@ -45,6 +54,45 @@ def get_municipios_by_uf(
     """)
     rows = db.execute(sql, {"uf": uf.upper()}).fetchall()
     return [{"codigo": r[0], "descricao": r[1]} for r in rows]
+
+
+@router.get("/search/cnaes")
+def search_cnaes(
+    q: str = "",
+    limit: int = 30,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),
+):
+    """
+    Search CNAE codes by code or description keyword.
+    Returns matching items for autocomplete dropdown.
+    """
+    q = q.strip()
+    if not q:
+        # Return top-level CNAEs (first 30)
+        sql = text("SELECT codigo, descricao FROM cnae ORDER BY codigo LIMIT :limit")
+        rows = db.execute(sql, {"limit": limit}).fetchall()
+    elif q.isdigit():
+        # Search by code prefix
+        sql = text("""
+            SELECT codigo, descricao FROM cnae
+            WHERE codigo LIKE :code_prefix
+            ORDER BY codigo
+            LIMIT :limit
+        """)
+        rows = db.execute(sql, {"code_prefix": f"{q}%", "limit": limit}).fetchall()
+    else:
+        # Search by description keyword
+        sql = text("""
+            SELECT codigo, descricao FROM cnae
+            WHERE descricao ILIKE :keyword
+            ORDER BY codigo
+            LIMIT :limit
+        """)
+        rows = db.execute(sql, {"keyword": f"%{q}%", "limit": limit}).fetchall()
+
+    return [{"codigo": r[0], "descricao": r[1]} for r in rows]
+
 
 MODO_FILA = os.getenv("MODO_FILA_PADRAO", "false").lower() == "true"
 
@@ -85,8 +133,16 @@ def _build_search_query(params: SearchRequest) -> tuple:
             for i, cod in enumerate(codigos):
                 bind_params[f"mun_{i}"] = int(cod)
     if params.cnae:
-        conditions.append("e.cnae_fiscal_principal = :cnae")
-        bind_params["cnae"] = params.cnae
+        # Support comma-separated CNAE codes for multi-select
+        cnaes = [c.strip() for c in params.cnae.split(",") if c.strip()]
+        if len(cnaes) == 1:
+            conditions.append("CAST(e.cnae_fiscal_principal AS TEXT) = :cnae")
+            bind_params["cnae"] = cnaes[0]
+        elif len(cnaes) > 1:
+            placeholders = [f":cnae_{i}" for i in range(len(cnaes))]
+            conditions.append(f"CAST(e.cnae_fiscal_principal AS TEXT) IN ({', '.join(placeholders)})")
+            for i, cod in enumerate(cnaes):
+                bind_params[f"cnae_{i}"] = cod
     if params.situacao:
         conditions.append("e.situacao_cadastral = :situacao")
         bind_params["situacao"] = params.situacao
@@ -167,15 +223,44 @@ def _build_search_query(params: SearchRequest) -> tuple:
                     ELSE NULL END AS telefone,
                e.correio_eletronico AS email,
                emp.capital_social, emp.natureza_juridica, emp.porte_empresa,
-               e.data_inicio_atividade, e.identificador_matriz_filial
+               e.data_inicio_atividade, e.identificador_matriz_filial,
+               m.descricao AS municipio_nome
         FROM estabelecimento e
         {join_clause}
+        LEFT JOIN munic m ON e.municipio = m.codigo
         WHERE {where_clause}
-        ORDER BY emp.razao_social
+        ORDER BY emp.razao_social NULLS LAST
         LIMIT :limit OFFSET :offset
     """
 
     return count_sql, data_sql, bind_params
+
+
+def _batch_fetch_socios(db, cnpj_basicos: list[str]) -> dict[str, str]:
+    """Fetch socios for a batch of cnpj_basico values in a single query.
+    Returns a dict mapping cnpj_basico -> concatenated socios string.
+    """
+    if not cnpj_basicos:
+        return {}
+    # Process in chunks to avoid excessively long IN clauses
+    CHUNK_SIZE = 5000
+    result_map: dict[str, str] = {}
+    for i in range(0, len(cnpj_basicos), CHUNK_SIZE):
+        chunk = cnpj_basicos[i:i + CHUNK_SIZE]
+        placeholders = [f":cnpj_{j}" for j in range(len(chunk))]
+        sql = f"""
+            SELECT cnpj_basico, string_agg(
+                nome_socio_razao_social || ' (' || cpf_cnpj_socio || ')', '; '
+            ) AS socios_lista
+            FROM socios
+            WHERE cnpj_basico IN ({', '.join(placeholders)})
+            GROUP BY cnpj_basico
+        """
+        params = {f"cnpj_{j}": v for j, v in enumerate(chunk)}
+        rows = db.execute(text(sql), params).fetchall()
+        for row in rows:
+            result_map[row[0]] = row[1]
+    return result_map
 
 
 @router.post("/search", response_model=SearchResponse)
@@ -230,7 +315,7 @@ def search(
         task_data = {
             "task_id": task_id,
             "user_id": current_user.id,
-            "params": params.model_dump(),
+            "params": {k: v for k, v in params.model_dump().items() if k not in ("search_id",)},
             "type": "search",
         }
         enqueue_task(task_data)
@@ -243,10 +328,21 @@ def search(
     # Execute search
     count_sql, data_sql, bind_params = _build_search_query(params)
 
+    # Use a single query with window function to avoid running count separately
     count_result = db.execute(text(count_sql), bind_params).scalar()
     total = count_result or 0
 
+    if total == 0:
+        return SearchResponse(
+            results=[], total=0, page=params.page,
+            limit=params.limit, credits_consumed=0,
+        )
+
     rows = db.execute(text(data_sql), bind_params).fetchall()
+
+    # Batch-fetch socios separately (avoids correlated subquery per row)
+    cnpj_basicos = list({r[0] for r in rows})
+    socios_map = _batch_fetch_socios(db, cnpj_basicos)
 
     results = [
         SearchResult(
@@ -263,6 +359,8 @@ def search(
             porte_empresa=int(r[18]) if r[18] else None,
             data_inicio_atividade=str(r[19]) if r[19] else None,
             identificador_matriz_filial=int(r[20]) if r[20] else None,
+            municipio_nome=r[21] if r[21] else None,
+            socios=socios_map.get(r[0]),
         )
         for r in rows
     ]
@@ -270,17 +368,37 @@ def search(
     # Search is free preview — no credits debited here.
     # User must use /search/process to pay credits and access full data.
 
-    # Save to search history
-    search_id = str(uuid.uuid4())[:8]
-    historico = HistoricoBusca(
-        usuario_id=current_user.id,
-        search_id=search_id,
-        params=params.model_dump(),
-        total_results=total,
-        status="realizada",
-        credits_consumed=0,
-    )
-    db.add(historico)
+    # A search_id represents the entire session (search → process → export).
+    # If the frontend passes an existing search_id (e.g. pagination), reuse it.
+    # Otherwise create a new entry — even if the filters are identical.
+    search_id = None
+    if params.search_id:
+        existing = (
+            db.query(HistoricoBusca)
+            .filter(
+                HistoricoBusca.search_id == params.search_id,
+                HistoricoBusca.usuario_id == current_user.id,
+            )
+            .first()
+        )
+        if existing and existing.status == "realizada":
+            search_id = existing.search_id
+            existing.total_results = total
+
+    if not search_id:
+        search_id = str(uuid.uuid4())[:8]
+        # Exclude transient fields from stored params
+        stored_params = {k: v for k, v in params.model_dump().items() if k not in ("search_id",)}
+        historico = HistoricoBusca(
+            usuario_id=current_user.id,
+            search_id=search_id,
+            params=stored_params,
+            total_results=total,
+            status="realizada",
+            credits_consumed=0,
+        )
+        db.add(historico)
+
     db.commit()
 
     return SearchResponse(
@@ -288,6 +406,44 @@ def search(
         limit=params.limit, credits_consumed=0,
         search_id=search_id,
     )
+
+
+# ─── Processing Progress ────────────────────────────────
+
+@router.get("/search/progress/{search_id}")
+def get_processing_progress(
+    search_id: str,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),
+):
+    """
+    Return real-time processing progress for a search entry.
+    Reads from Redis while processing is active, falls back to DB status.
+    """
+    entry = (
+        db.query(HistoricoBusca)
+        .filter(
+            HistoricoBusca.search_id == search_id,
+            HistoricoBusca.usuario_id == current_user.id,
+        )
+        .first()
+    )
+    if not entry:
+        raise HTTPException(status_code=404, detail="Busca não encontrada")
+
+    if entry.status == "processando":
+        progress = get_process_progress(search_id)
+        if progress:
+            return {"status": "processando", "percent": progress["percent"], "phase": progress["phase"]}
+        return {"status": "processando", "percent": 0, "phase": "Aguardando início..."}
+
+    if entry.status == "processada":
+        return {"status": "processada", "percent": 100, "phase": "Concluído"}
+
+    if entry.status == "erro":
+        return {"status": "erro", "percent": 0, "phase": "Falha no processamento"}
+
+    return {"status": entry.status, "percent": 0, "phase": ""}
 
 
 # ─── Search History ─────────────────────────────────────
@@ -303,7 +459,7 @@ def list_search_history(
         db.query(HistoricoBusca)
         .filter(HistoricoBusca.usuario_id == current_user.id)
         .order_by(HistoricoBusca.created_at.desc())
-        .limit(limit)
+        .limit(min(limit, 200))
         .all()
     )
     return rows
@@ -340,29 +496,396 @@ def get_search_by_id(
     }
 
 
+@router.delete("/search/history")
+def delete_all_history(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),
+):
+    """
+    Delete ALL search history entries for the current user.
+    Also removes associated export files from S3 storage.
+    """
+    entries = (
+        db.query(HistoricoBusca)
+        .filter(HistoricoBusca.usuario_id == current_user.id)
+        .all()
+    )
+
+    deleted_count = 0
+    files_deleted = 0
+    for entry in entries:
+        if entry.file_id:
+            try:
+                storage.delete_object(f"{entry.file_id}.csv")
+                storage.delete_object(f"{entry.file_id}.xlsx")
+                files_deleted += 1
+            except Exception:
+                pass  # Best effort — file may already be gone
+        db.delete(entry)
+        deleted_count += 1
+
+    db.commit()
+    return {
+        "message": f"{deleted_count} consulta(s) removida(s)",
+        "files_deleted": files_deleted,
+    }
+
+
+@router.delete("/search/history/{search_id}")
+def delete_search_history_entry(
+    search_id: str,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),
+):
+    """Delete a single search history entry and its export files."""
+    entry = (
+        db.query(HistoricoBusca)
+        .filter(
+            HistoricoBusca.search_id == search_id,
+            HistoricoBusca.usuario_id == current_user.id,
+        )
+        .first()
+    )
+    if not entry:
+        raise HTTPException(status_code=404, detail="Busca não encontrada")
+
+    if entry.file_id:
+        try:
+            storage.delete_object(f"{entry.file_id}.csv")
+            storage.delete_object(f"{entry.file_id}.xlsx")
+        except Exception:
+            pass
+
+    db.delete(entry)
+    db.commit()
+    return {"message": "Consulta removida com sucesso"}
+
+
 # ─── Process (Credit-gated) ─────────────────────────────
 
 class ProcessRequest(BaseModel):
     """Request to process (pay credits for) a search query."""
     search_params: SearchRequest
     quantidade: int  # How many CNPJs to process (1 credit each)
+    search_id: Optional[str] = None  # Link to existing search session
 
 class ProcessResponse(BaseModel):
-    results: list[SearchResult]
-    total: int
+    search_id: str
+    status: str  # processando
     credits_consumed: int
+    quantidade: int
+
+
+# Column headers for export files
+_CSV_HEADERS = [
+    "CNPJ", "Razão Social", "Nome Fantasia", "Situação", "UF", "Município",
+    "CNAE Principal", "Bairro", "Logradouro", "Número", "Complemento", "CEP",
+    "Telefone", "Email", "Capital Social", "Natureza Jurídica", "Porte",
+    "Data Início Atividade", "Matriz/Filial", "Sócios",
+]
+
+
+_SITUACAO_MAP = {"1": "Nula", "2": "Ativa", "3": "Suspensa", "4": "Inapta", "8": "Baixada"}
+_PORTE_MAP = {1: "Não Informado", 2: "Micro Empresa", 3: "Empresa de Pequeno Porte", 5: "Demais"}
+_MATRIZ_MAP = {1: "Matriz", 2: "Filial"}
+
+
+def _format_date(value: str | None) -> str:
+    """Convert date stored as 'YYYYMMDD' integer-string to DD/MM/YYYY."""
+    if not value or len(value) != 8 or not value.isdigit():
+        return value or ""
+    return f"{value[6:8]}/{value[4:6]}/{value[:4]}"
+
+
+def _format_capital(value: float | None) -> str:
+    """Format capital_social as R$ X.XXX,XX."""
+    if not value:
+        return ""
+    try:
+        formatted = f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {formatted}"
+    except (ValueError, TypeError):
+        return str(value)
+
+
+def _format_cnpj(basico: str, ordem: str, dv: str) -> str:
+    """Format CNPJ as XX.XXX.XXX/XXXX-XX"""
+    raw = f"{basico}{ordem}{dv}"
+    if len(raw) == 14:
+        return f"{raw[:2]}.{raw[2:5]}.{raw[5:8]}/{raw[8:12]}-{raw[12:14]}"
+    return raw
+
+
+def _results_to_rows(results: list[SearchResult]) -> list[list]:
+    """Convert SearchResult list to plain rows for CSV/XLSX."""
+    rows = []
+    for r in results:
+        rows.append([
+            _format_cnpj(r.cnpj_basico, r.cnpj_ordem or "", r.cnpj_dv or ""),
+            r.razao_social or "", r.nome_fantasia or "",
+            _SITUACAO_MAP.get(r.situacao_cadastral, r.situacao_cadastral or ""),
+            r.uf,
+            r.municipio_nome or r.municipio or "",
+            r.cnae_fiscal_principal or "", r.bairro or "",
+            r.logradouro or "", r.numero or "", r.complemento or "",
+            r.cep or "", r.telefone or "", r.email or "",
+            _format_capital(r.capital_social),
+            str(r.natureza_juridica) if r.natureza_juridica else "",
+            _PORTE_MAP.get(r.porte_empresa, "") if r.porte_empresa else "",
+            _format_date(r.data_inicio_atividade),
+            _MATRIZ_MAP.get(r.identificador_matriz_filial, "") if r.identificador_matriz_filial else "",
+            r.socios or "",
+        ])
+    return rows
+
+
+def _save_processed_files(file_id: str, results: list[SearchResult], user_id: int):
+    """Generate CSV and XLSX, upload both to S3 (MinIO)."""
+    rows = _results_to_rows(results)
+
+    # ── CSV → S3 ──
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow(_CSV_HEADERS)
+    writer.writerows(rows)
+    csv_bytes = buf.getvalue().encode("utf-8-sig")
+    storage.upload_bytes(
+        f"{file_id}.csv", csv_bytes,
+        content_type="text/csv; charset=utf-8",
+    )
+
+    # ── XLSX → S3 ──
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Contatos"
+        ws.append(_CSV_HEADERS)
+        for row in rows:
+            ws.append(row)
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            wb.save(tmp.name)
+            storage.upload_file(
+                f"{file_id}.xlsx", tmp.name,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            os.unlink(tmp.name)
+    except ImportError:
+        logger.warning("openpyxl not installed; XLSX export unavailable")
+
+    return file_id
+
+
+def _debit_credits_background(db: Session, user_id: int, amount: int, motivo: str) -> int:
+    """Debit credits inside a background task (no HTTPException)."""
+    import datetime
+    from .models import CreditoTransacao
+    credito = db.query(Credito).filter(Credito.usuario_id == user_id).with_for_update().first()
+    if not credito or credito.saldo < amount:
+        raise RuntimeError(
+            f"Créditos insuficientes. Necessário: {amount}, disponível: {credito.saldo if credito else 0}"
+        )
+    credito.saldo -= amount
+    credito.creditos_consumidos += amount
+    credito.updated_at = datetime.datetime.utcnow()
+    db.add(CreditoTransacao(
+        usuario_id=user_id,
+        tipo="consumo",
+        quantidade=-amount,
+        motivo=motivo,
+    ))
+    return amount
+
+
+def _update_progress(search_id: str, percent: int, phase: str):
+    """Push a progress snapshot to Redis so the frontend can poll it."""
+    set_process_progress(search_id, {"percent": percent, "phase": phase})
+
+
+def _process_in_background(search_id: str, user_id: int, params_dict: dict, quantidade: int):
+    """Background task: run the query, generate files, debit credits only on success, update history entry."""
+    from .database import SessionLocal
+    db = SessionLocal()
+    file_id = None
+    t_start = time.monotonic()
+    try:
+        _update_progress(search_id, 0, "Preparando consulta...")
+        logger.info(f"[{search_id}] Processamento iniciado | user_id={user_id} quantidade={quantidade} UF={params_dict.get('uf', '?')}")
+
+        params = SearchRequest(**params_dict)
+        params.limit = quantidade
+        params.page = 1
+
+        count_sql, data_sql, bind_params = _build_search_query(params)
+
+        _update_progress(search_id, 5, "Contando resultados...")
+        t0 = time.monotonic()
+        count_result = db.execute(text(count_sql), bind_params).scalar()
+        total = count_result or 0
+        logger.info(f"[{search_id}] COUNT concluído em {time.monotonic() - t0:.2f}s | total={total:,}")
+
+        _update_progress(search_id, 15, "Consultando banco de dados...")
+        t0 = time.monotonic()
+        rows = db.execute(text(data_sql), bind_params).fetchall()
+        actual_count = len(rows)
+        query_elapsed = time.monotonic() - t0
+        rate = (actual_count / query_elapsed * 60) if query_elapsed > 0 else 0
+        logger.info(f"[{search_id}] Query concluída em {query_elapsed:.2f}s | {actual_count:,} linhas | {rate:,.0f} contatos/min")
+
+        if actual_count == 0:
+            _update_progress(search_id, 100, "Concluído")
+            entry = db.query(HistoricoBusca).filter(
+                HistoricoBusca.search_id == search_id,
+            ).first()
+            if entry:
+                entry.status = "processada"
+                entry.total_results = total
+                entry.credits_consumed = 0
+                entry.quantidade_processada = 0
+            db.commit()
+            clear_process_progress(search_id)
+            logger.info(f"[{search_id}] Nenhum resultado encontrado, nenhum crédito debitado")
+            return
+
+        _update_progress(search_id, 35, f"Buscando sócios de {actual_count:,} contatos...")
+        t0 = time.monotonic()
+        cnpj_basicos = list({r[0] for r in rows})
+        socios_map = _batch_fetch_socios(db, cnpj_basicos)
+        socios_elapsed = time.monotonic() - t0
+        logger.info(f"[{search_id}] Sócios buscados em {socios_elapsed:.2f}s | {len(socios_map):,} CNPJs com sócios")
+
+        _update_progress(search_id, 45, f"Montando {actual_count:,} registros...")
+        t0 = time.monotonic()
+        results = [
+            SearchResult(
+                cnpj_basico=r[0], cnpj_ordem=r[1], cnpj_dv=r[2],
+                razao_social=r[3], nome_fantasia=r[4],
+                situacao_cadastral=str(r[5]) if r[5] else None,
+                uf=r[6], municipio=str(r[7]) if r[7] else None,
+                cnae_fiscal_principal=str(r[8]) if r[8] else None,
+                bairro=r[9], logradouro=r[10], numero=r[11],
+                complemento=r[12], cep=r[13],
+                telefone=r[14], email=r[15],
+                capital_social=float(r[16]) if r[16] else None,
+                natureza_juridica=int(r[17]) if r[17] else None,
+                porte_empresa=int(r[18]) if r[18] else None,
+                data_inicio_atividade=str(r[19]) if r[19] else None,
+                identificador_matriz_filial=int(r[20]) if r[20] else None,
+                municipio_nome=r[21] if r[21] else None,
+                socios=socios_map.get(r[0]),
+            )
+            for r in rows
+        ]
+        parse_elapsed = time.monotonic() - t0
+        parse_rate = (actual_count / parse_elapsed * 60) if parse_elapsed > 0 else 0
+        logger.info(f"[{search_id}] Parsing concluído em {parse_elapsed:.2f}s | {parse_rate:,.0f} contatos/min")
+
+        # Generate downloadable files (CSV + XLSX)
+        file_id = str(uuid.uuid4())[:12]
+
+        _update_progress(search_id, 50, "Gerando arquivo CSV...")
+        t0 = time.monotonic()
+        csv_rows = _results_to_rows(results)
+        buf = io.StringIO()
+        writer = csv.writer(buf, delimiter=";")
+        writer.writerow(_CSV_HEADERS)
+        writer.writerows(csv_rows)
+        csv_bytes = buf.getvalue().encode("utf-8-sig")
+        csv_size_kb = len(csv_bytes) / 1024
+        storage.upload_bytes(
+            f"{file_id}.csv", csv_bytes,
+            content_type="text/csv; charset=utf-8",
+        )
+        csv_elapsed = time.monotonic() - t0
+        logger.info(f"[{search_id}] CSV gerado e enviado ao S3 em {csv_elapsed:.2f}s | {csv_size_kb:,.1f} KB")
+
+        _update_progress(search_id, 70, "Gerando arquivo Excel...")
+        t0 = time.monotonic()
+        try:
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Contatos"
+            ws.append(_CSV_HEADERS)
+            for row in csv_rows:
+                ws.append(row)
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                wb.save(tmp.name)
+                xlsx_size_kb = os.path.getsize(tmp.name) / 1024
+                storage.upload_file(
+                    f"{file_id}.xlsx", tmp.name,
+                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+                os.unlink(tmp.name)
+            xlsx_elapsed = time.monotonic() - t0
+            logger.info(f"[{search_id}] XLSX gerado e enviado ao S3 em {xlsx_elapsed:.2f}s | {xlsx_size_kb:,.1f} KB")
+        except ImportError:
+            logger.warning(f"[{search_id}] openpyxl não instalado; exportação XLSX indisponível")
+
+        _update_progress(search_id, 90, "Debitando créditos...")
+        credits_consumed = _debit_credits_background(
+            db, user_id, actual_count,
+            f"Processamento UF={params_dict.get('uf', '?')} - {actual_count} contatos",
+        )
+
+        _update_progress(search_id, 95, "Finalizando...")
+        entry = db.query(HistoricoBusca).filter(
+            HistoricoBusca.search_id == search_id,
+        ).first()
+        if entry:
+            entry.status = "processada"
+            entry.total_results = total
+            entry.file_id = file_id
+            entry.credits_consumed = credits_consumed
+            entry.quantidade_processada = actual_count
+        db.commit()
+
+        _update_progress(search_id, 100, "Concluído")
+        clear_process_progress(search_id)
+
+        total_elapsed = time.monotonic() - t_start
+        overall_rate = (actual_count / total_elapsed * 60) if total_elapsed > 0 else 0
+        logger.info(
+            f"[{search_id}] Processamento concluído em {total_elapsed:.2f}s | "
+            f"{actual_count:,} contatos | {credits_consumed:,} créditos | "
+            f"{overall_rate:,.0f} contatos/min | "
+            f"CSV={csv_size_kb:,.1f}KB file_id={file_id}"
+        )
+    except Exception as e:
+        total_elapsed = time.monotonic() - t_start
+        logger.error(f"[{search_id}] Processamento falhou após {total_elapsed:.2f}s: {e}")
+        db.rollback()
+        if file_id:
+            try:
+                storage.delete_object(f"{file_id}.csv")
+                storage.delete_object(f"{file_id}.xlsx")
+            except Exception:
+                pass
+        try:
+            entry = db.query(HistoricoBusca).filter(
+                HistoricoBusca.search_id == search_id,
+            ).first()
+            if entry:
+                entry.status = "erro"
+                db.commit()
+        except Exception:
+            pass
+        clear_process_progress(search_id)
+    finally:
+        db.close()
 
 
 @router.post("/search/process", response_model=ProcessResponse)
 def process_search(
     req: ProcessRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(get_current_user),
 ):
     """
-    Process (unlock) search results by paying credits.
-    1 credit per CNPJ.
-    Returns the requested number of full results.
+    Enqueue processing of search results.
+    Credits are debited only after files are successfully generated.
+    The user can track progress via the search history endpoint.
     """
     assinatura = db.query(Assinatura).filter(
         Assinatura.usuario_id == current_user.id,
@@ -377,48 +900,114 @@ def process_search(
     if quantidade > 50000:
         raise HTTPException(status_code=400, detail="Máximo de 50.000 contatos por processamento")
 
-    params = req.search_params
-    params.limit = quantidade
-    params.page = 1
-
-    count_sql, data_sql, bind_params = _build_search_query(params)
-
-    count_result = db.execute(text(count_sql), bind_params).scalar()
-    total = count_result or 0
-
-    rows = db.execute(text(data_sql), bind_params).fetchall()
-    actual_count = len(rows)
-
-    if actual_count == 0:
-        return ProcessResponse(results=[], total=total, credits_consumed=0)
-
-    # Debit credits: 1 per CNPJ
-    credits_consumed = debit_credits(
-        db, current_user.id, actual_count,
-        f"Processamento UF={params.uf} - {actual_count} contatos",
-    )
-    db.commit()
-
-    results = [
-        SearchResult(
-            cnpj_basico=r[0], cnpj_ordem=r[1], cnpj_dv=r[2],
-            razao_social=r[3], nome_fantasia=r[4],
-            situacao_cadastral=str(r[5]) if r[5] else None,
-            uf=r[6], municipio=str(r[7]) if r[7] else None,
-            cnae_fiscal_principal=str(r[8]) if r[8] else None,
-            bairro=r[9], logradouro=r[10], numero=r[11],
-            complemento=r[12], cep=r[13],
-            telefone=r[14], email=r[15],
-            capital_social=float(r[16]) if r[16] else None,
-            natureza_juridica=int(r[17]) if r[17] else None,
-            porte_empresa=int(r[18]) if r[18] else None,
-            data_inicio_atividade=str(r[19]) if r[19] else None,
-            identificador_matriz_filial=int(r[20]) if r[20] else None,
+    # Validate user has enough credits (without debiting)
+    credito = db.query(Credito).filter(Credito.usuario_id == current_user.id).first()
+    if not credito or credito.saldo < quantidade:
+        raise HTTPException(
+            status_code=402,
+            detail=f"Créditos insuficientes. Necessário: {quantidade}, disponível: {credito.saldo if credito else 0}",
         )
-        for r in rows
-    ]
 
-    return ProcessResponse(results=results, total=total, credits_consumed=credits_consumed)
+    # Reuse existing history entry if search_id provided, otherwise create new
+    if req.search_id:
+        existing_entry = (
+            db.query(HistoricoBusca)
+            .filter(
+                HistoricoBusca.search_id == req.search_id,
+                HistoricoBusca.usuario_id == current_user.id,
+            )
+            .first()
+        )
+        if existing_entry and existing_entry.status == "realizada":
+            search_id = existing_entry.search_id
+            existing_entry.status = "processando"
+            existing_entry.quantidade_processada = quantidade
+            existing_entry.credits_consumed = 0
+            db.commit()
+        else:
+            # Entry not found or already processed — create new
+            search_id = str(uuid.uuid4())[:8]
+            stored_params = {k: v for k, v in req.search_params.model_dump().items() if k not in ("search_id",)}
+            historico = HistoricoBusca(
+                usuario_id=current_user.id,
+                search_id=search_id,
+                params=stored_params,
+                total_results=0,
+                status="processando",
+                credits_consumed=0,
+                quantidade_processada=quantidade,
+            )
+            db.add(historico)
+            db.commit()
+    else:
+        search_id = str(uuid.uuid4())[:8]
+        stored_params = {k: v for k, v in req.search_params.model_dump().items() if k not in ("search_id",)}
+        historico = HistoricoBusca(
+            usuario_id=current_user.id,
+            search_id=search_id,
+            params=stored_params,
+            total_results=0,
+            status="processando",
+            credits_consumed=0,
+            quantidade_processada=quantidade,
+        )
+        db.add(historico)
+        db.commit()
+
+    # Dispatch background processing (credits debited on success)
+    params_for_bg = {k: v for k, v in req.search_params.model_dump().items() if k not in ("search_id",)}
+    background_tasks.add_task(
+        _process_in_background,
+        search_id,
+        current_user.id,
+        params_for_bg,
+        quantidade,
+    )
+
+    return ProcessResponse(
+        search_id=search_id,
+        status="processando",
+        credits_consumed=0,
+        quantidade=quantidade,
+    )
+
+
+# ─── File Download (streamed from S3) ───────────────────
+
+@router.get("/search/download/{file_id}")
+def download_processed_file(
+    file_id: str,
+    formato: str = Query("csv", pattern="^(csv|xlsx)$"),
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),
+):
+    """
+    Stream a processed file from S3 (MinIO) to the client.
+    Files are stored permanently.
+    """
+    # Verify ownership via database
+    historico = db.query(HistoricoBusca).filter(
+        HistoricoBusca.file_id == file_id,
+        HistoricoBusca.usuario_id == current_user.id,
+    ).first()
+    if not historico:
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+
+    s3_key = f"{file_id}.{formato}"
+    if not storage.object_exists(s3_key):
+        raise HTTPException(
+            status_code=404,
+            detail="Formato XLSX não disponível" if formato == "xlsx" else "Arquivo não encontrado no storage",
+        )
+
+    body = storage.get_object_body(s3_key)
+    filename = f"contatos_{file_id}.{formato}"
+    media = "text/csv" if formato == "csv" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return StreamingResponse(
+        body,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ─── Export (Credit-gated, 10 credits) ──────────────────
@@ -462,7 +1051,7 @@ def export_with_credits(
     task_data = {
         "task_id": task_id,
         "user_id": current_user.id,
-        "params": req.search_params.model_dump(),
+        "params": {k: v for k, v in req.search_params.model_dump().items() if k not in ("search_id",)},
         "formato": req.formato,
         "type": "export",
     }

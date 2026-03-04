@@ -72,9 +72,9 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> Usuario
 
 
 def require_super_admin(current_user: Usuario = Depends(get_current_user)) -> Usuario:
-    """Dependency that requires super_admin role."""
-    if current_user.role != "super_admin":
-        raise HTTPException(status_code=403, detail="Acesso restrito a super-admin")
+    """Dependency that requires admin or super_admin role."""
+    if current_user.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
     return current_user
 
 
