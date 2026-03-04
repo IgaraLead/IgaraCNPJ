@@ -1,5 +1,5 @@
 -- ============================================================
--- Plataforma CNPJ (igarateca) - Database Schema
+-- IgaraLead Entity - Database Schema
 -- PostgreSQL 15+
 -- ============================================================
 

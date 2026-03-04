@@ -55,7 +55,7 @@ def _run_column_migrations():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
-    logger.info("Starting CNPJ Platform API...")
+    logger.info("Starting IgaraLead Entity API...")
     # Create tables if they don't exist (dev convenience)
     Base.metadata.create_all(bind=engine)
     # Add columns that may be missing on existing tables (idempotent)
@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Plataforma CNPJ - igarateca",
+    title="IgaraLead Entity",
     description="API para consulta de dados CNPJ da Receita Federal",
     version="1.0.0",
     lifespan=lifespan,
@@ -95,7 +95,7 @@ app.include_router(pagseguro_router)
 
 @app.get("/")
 def root():
-    return {"message": "API da Plataforma CNPJ - OK", "version": "1.0.0"}
+    return {"message": "IgaraLead Entity API - OK", "version": "1.0.0"}
 
 
 @app.get("/health")

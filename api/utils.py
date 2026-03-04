@@ -1,5 +1,5 @@
 """
-Utility functions for the CNPJ platform.
+Utility functions for IgaraLead Entity.
 """
 
 import os

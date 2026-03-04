@@ -330,7 +330,7 @@ text
 ```
 /src
   /modules
-    /cnpj-platform    # Módulo atual (dados CNPJ)
+    /entity           # Módulo atual (dados CNPJ)
       /components
       /pages
       /hooks

@@ -1,5 +1,5 @@
 # ──────────────────────────────────────
-# igarateca – Backend Dependencies
+# IgaraLead Entity – Backend Dependencies
 # ──────────────────────────────────────
 
 # Web framework

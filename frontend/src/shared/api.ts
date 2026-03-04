@@ -1,5 +1,5 @@
 /**
- * API client for the CNPJ Platform backend.
+ * API client for the IgaraLead Entity backend.
  * All requests go through the Vite proxy (/api → http://localhost:8000).
  * Cookies are sent automatically (credentials: "include").
  */

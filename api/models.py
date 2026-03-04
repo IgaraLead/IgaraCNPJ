@@ -1,5 +1,5 @@
 """
-SQLAlchemy ORM models for the CNPJ platform.
+SQLAlchemy ORM models for IgaraLead Entity.
 """
 
 import datetime
