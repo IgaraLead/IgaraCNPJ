@@ -148,4 +148,6 @@ entity/
 
 ## Licença
 
-Este projeto está licenciado sob a [Licença MIT](LICENSE).
+Este projeto é software proprietário da **IgaraLead**. Todos os direitos reservados. Consulte o arquivo [LICENSE](LICENSE) para mais detalhes.
+
+O módulo ETL (`api/etl/`) é baseado em trabalho de terceiros e está licenciado sob a [Licença MIT](api/etl/LICENSE).
