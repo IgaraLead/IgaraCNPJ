@@ -38,6 +38,26 @@ LIMITE_CREDITOS_MAXIMO = int(os.getenv("LIMITE_CREDITOS_MAXIMO", "100000"))
 ENV_ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@seudominio.com")
 
 
+def require_password_confirmation(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_super_admin),
+) -> Usuario:
+    """Dependency that verifies admin password via X-Admin-Password header.
+    Required for all destructive / mass operations."""
+    from .auth import verify_password
+
+    password = request.headers.get("X-Admin-Password")
+    if not password:
+        raise HTTPException(
+            status_code=400,
+            detail="Senha de confirmação obrigatória para esta ação",
+        )
+    if not verify_password(password, admin.senha_hash):
+        raise HTTPException(status_code=403, detail="Senha incorreta")
+    return admin
+
+
 @router.get("/stats", response_model=StatsOut)
 def admin_stats(
     db: Session = Depends(get_db),
@@ -180,7 +200,7 @@ def adjust_credits(
     data: AjusteCreditos,
     request: Request,
     db: Session = Depends(get_db),
-    admin: Usuario = Depends(require_super_admin),
+    admin: Usuario = Depends(require_password_confirmation),
 ):
     """Manually adjust a user's credits."""
     credito = db.query(Credito).filter(Credito.usuario_id == user_id).first()
@@ -223,7 +243,7 @@ def block_user(
     user_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    admin: Usuario = Depends(require_super_admin),
+    admin: Usuario = Depends(require_password_confirmation),
 ):
     """Block/unblock a user."""
     user = db.query(Usuario).filter(Usuario.id == user_id).first()
@@ -344,7 +364,7 @@ def change_user_role(
     data: AdminChangeRole,
     request: Request,
     db: Session = Depends(get_db),
-    admin: Usuario = Depends(require_super_admin),
+    admin: Usuario = Depends(require_password_confirmation),
 ):
     """Change a user's role. Cannot change the env-configured admin."""
     if data.role not in ("user", "admin"):
@@ -380,7 +400,7 @@ def set_user_subscription(
     data: AdminSetSubscription,
     request: Request,
     db: Session = Depends(get_db),
-    admin: Usuario = Depends(require_super_admin),
+    admin: Usuario = Depends(require_password_confirmation),
 ):
     """Manually set a user's subscription plan with optional expiry."""
     from .plans import PLANS
@@ -556,10 +576,13 @@ async def etl_progress_stream(
 @router.post("/run-etl")
 def run_etl(
     request: Request,
+    mode: str = Query("atualizar", regex="^(atualizar|recriar)$"),
     db: Session = Depends(get_db),
-    admin: Usuario = Depends(require_super_admin),
+    admin: Usuario = Depends(require_password_confirmation),
 ):
-    """Trigger ETL process as background task (super-admin only)."""
+    """Trigger ETL process as background task (super-admin only).
+    mode: 'atualizar' (upsert into existing data) or 'recriar' (drop & recreate tables).
+    """
     from .etl.config.settings import ETLConfig
     from .etl.etl_orchestrator import ETLOrchestrator
     import threading
@@ -573,7 +596,7 @@ def run_etl(
     log = LogAcao(
         usuario_id=admin.id,
         acao="run_etl",
-        detalhes={},
+        detalhes={"mode": mode},
         ip_address=request.client.host if request.client else None,
     )
     db.add(log)
@@ -583,7 +606,7 @@ def run_etl(
     etl_progress_set({
         "running": True,
         "phase": "init",
-        "step": "Inicializando ETL...",
+        "step": f"Inicializando ETL (modo: {mode})...",
         "percent": 0,
         "detail": "",
         "updated_at": _time.time(),
@@ -593,7 +616,10 @@ def run_etl(
         try:
             config = ETLConfig()
             etl = ETLOrchestrator(config)
-            etl.run_complete_etl()
+            if mode == "recriar":
+                etl.run_recreate_etl()
+            else:
+                etl.run_complete_etl()
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"ETL background error: {e}")
@@ -601,14 +627,14 @@ def run_etl(
     thread = threading.Thread(target=_run_etl_bg, daemon=True)
     thread.start()
 
-    return {"status": "ETL iniciado em background"}
+    return {"status": f"ETL iniciado em background (modo: {mode})"}
 
 
 @router.post("/reindex")
 def reindex(
     request: Request,
     db: Session = Depends(get_db),
-    admin: Usuario = Depends(require_super_admin),
+    admin: Usuario = Depends(require_password_confirmation),
 ):
     """Recreate database indexes in background (super-admin only)."""
     from .etl.config.settings import ETLConfig, DatabaseConfig
@@ -677,7 +703,7 @@ def reindex(
 def clear_cache(
     request: Request,
     db: Session = Depends(get_db),
-    admin: Usuario = Depends(require_super_admin),
+    admin: Usuario = Depends(require_password_confirmation),
 ):
     """Flush Redis cache."""
     count = cache_clear_all()

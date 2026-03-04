@@ -378,27 +378,44 @@ export const adminApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  changeRole: (userId: number, role: string) =>
+  changeRole: (userId: number, role: string, senha: string) =>
     request<{ user_id: number; role: string }>(`/admin/users/${userId}/role`, {
       method: "POST",
       body: JSON.stringify({ role }),
+      headers: { "X-Admin-Password": senha },
     }),
-  setSubscription: (userId: number, data: { plano: string; permanente: boolean; dias_validade?: number; creditos?: number }) =>
+  setSubscription: (userId: number, data: { plano: string; permanente: boolean; dias_validade?: number; creditos?: number }, senha: string) =>
     request<{ user_id: number; plano: string; permanente: boolean; data_validade: string | null }>(
       `/admin/users/${userId}/subscription`,
-      { method: "POST", body: JSON.stringify(data) },
+      { method: "POST", body: JSON.stringify(data), headers: { "X-Admin-Password": senha } },
     ),
-  adjustCredits: (userId: number, quantidade: number, motivo: string) =>
+  adjustCredits: (userId: number, quantidade: number, motivo: string, senha: string) =>
     request<{ user_id: number; novo_saldo: number }>(`/admin/users/${userId}/adjust-credits`, {
       method: "POST",
       body: JSON.stringify({ quantidade, motivo }),
+      headers: { "X-Admin-Password": senha },
     }),
-  blockUser: (userId: number) =>
-    request<{ user_id: number; ativo: boolean }>(`/admin/users/${userId}/block`, { method: "POST" }),
+  blockUser: (userId: number, senha: string) =>
+    request<{ user_id: number; ativo: boolean }>(`/admin/users/${userId}/block`, {
+      method: "POST",
+      headers: { "X-Admin-Password": senha },
+    }),
   etlProgress: () => request<EtlProgress>("/admin/etl-progress"),
-  runEtl: () => request<{ status: string }>("/admin/run-etl", { method: "POST" }),
-  reindex: () => request<{ status: string }>("/admin/reindex", { method: "POST" }),
-  clearCache: () => request<{ status: string }>("/admin/clear-cache", { method: "POST" }),
+  runEtl: (mode: "atualizar" | "recriar", senha: string) =>
+    request<{ status: string }>(`/admin/run-etl?mode=${mode}`, {
+      method: "POST",
+      headers: { "X-Admin-Password": senha },
+    }),
+  reindex: (senha: string) =>
+    request<{ status: string }>("/admin/reindex", {
+      method: "POST",
+      headers: { "X-Admin-Password": senha },
+    }),
+  clearCache: (senha: string) =>
+    request<{ status: string }>("/admin/clear-cache", {
+      method: "POST",
+      headers: { "X-Admin-Password": senha },
+    }),
   searchExtractions: (q = "", page = 1, limit = 20) =>
     request<{ extractions: ExtractionInfo[]; total: number }>(`/admin/extractions?q=${encodeURIComponent(q)}&page=${page}&limit=${limit}`),
   getExtraction: (fileId: string) =>

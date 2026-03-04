@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Outlet, NavLink, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../store";
+import Logo from "../ui/Logo";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
@@ -85,68 +86,79 @@ export default function AppLayout() {
       {/* Mobile overlay */}
       <div className={`sidebar-overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
 
-      {/* Sidebar – fixed position */}
-      <aside
-        className={`sidebar ${sidebarOpen ? "open" : ""}`}
-        style={{
-          width: sidebarWidth,
-          minWidth: sidebarWidth,
-          position: "fixed",
-          top: 0,
-          left: 0,
-          bottom: 0,
-          padding: collapsed ? "1.5rem 0.5rem" : "1.5rem 1rem",
-          display: "flex",
-          flexDirection: "column",
-          gap: "0.25rem",
-          borderRadius: 0,
-          borderRight: "1px solid rgba(45,56,71,0.3)",
-          background: "rgba(14,17,28,0.92)",
-          backdropFilter: "blur(20px)",
-          WebkitBackdropFilter: "blur(20px)",
-          zIndex: 50,
-          overflowY: "auto",
-          transition: "width 0.25s ease, min-width 0.25s ease, padding 0.25s ease",
-        }}
-      >
-        <div style={{ padding: collapsed ? "0.5rem 0" : "0.5rem", marginBottom: "1.5rem", display: "flex", alignItems: "center", justifyContent: collapsed ? "center" : "space-between" }}>
-          {!collapsed && (
-            <div>
-              <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>
-                <span style={{ background: "linear-gradient(135deg, hsl(268,100%,60%), hsl(213,100%,60%))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>IgaraLead Entity</span>
-              </h2>
-              <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem", marginTop: "0.25rem" }}>
-                {user.plano ? `Plano: ${user.plano.charAt(0).toUpperCase() + user.plano.slice(1)}` : "Plano gratuito"}
-              </p>
-            </div>
-          )}
-          <button
-            onClick={() => setCollapsed(!collapsed)}
-            title={collapsed ? "Expandir menu" : "Recolher menu"}
-            style={{
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(45,56,71,0.5)",
-              borderRadius: "8px",
-              color: "rgba(255,255,255,0.6)",
-              cursor: "pointer",
-              padding: "0.35rem",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "all 0.2s",
-              flexShrink: 0,
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              {collapsed
-                ? <><polyline points="9 18 15 12 9 6" /></>
-                : <><polyline points="15 18 9 12 15 6" /></>
-              }
-            </svg>
-          </button>
-        </div>
+      {/* Sidebar wrapper – holds sidebar + protruding toggle button */}
+      <div style={{ position: "fixed", top: 0, left: 0, bottom: 0, width: sidebarWidth, zIndex: 50, transition: "width 0.25s ease", overflow: "visible" }}>
+        {/* Collapse/expand toggle – sits on the edge */}
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          title={collapsed ? "Expandir menu" : "Recolher menu"}
+          style={{
+            position: "absolute",
+            top: collapsed ? "1.65rem" : "2.15rem",
+            right: "-13px",
+            zIndex: 51,
+            width: "26px",
+            height: "26px",
+            background: "rgba(14,17,28,0.95)",
+            border: "1px solid rgba(45,56,71,0.5)",
+            borderRadius: "50%",
+            color: "rgba(255,255,255,0.6)",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            transition: "top 0.25s ease, background 0.2s, color 0.2s",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(45,56,71,0.9)"; e.currentTarget.style.color = "#fff"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(14,17,28,0.95)"; e.currentTarget.style.color = "rgba(255,255,255,0.6)"; }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            {collapsed
+              ? <polyline points="9 18 15 12 9 6" />
+              : <polyline points="15 18 9 12 15 6" />
+            }
+          </svg>
+        </button>
 
-        <nav style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+        {/* Sidebar panel */}
+        <aside
+          className={`sidebar ${sidebarOpen ? "open" : ""}`}
+          style={{
+            width: "100%",
+            height: "100%",
+            padding: collapsed ? "1.5rem 0.5rem" : "1.5rem 1rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.25rem",
+            borderRadius: 0,
+            borderRight: "1px solid rgba(45,56,71,0.3)",
+            background: "rgba(14,17,28,0.92)",
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+            overflowY: "auto",
+            transition: "padding 0.25s ease",
+          }}
+        >
+          <div style={{ padding: collapsed ? "0.5rem 0" : "0.5rem", marginBottom: "1rem", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {!collapsed ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", minWidth: 0 }}>
+                <Logo size={36} style={{ flexShrink: 0 }} />
+                <div style={{ minWidth: 0 }}>
+                  <h2 style={{ fontSize: "1.05rem", fontWeight: 700, lineHeight: 1.2 }}>
+                    <span style={{ background: "linear-gradient(135deg, hsl(268,100%,60%), hsl(213,100%,60%))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>IgaraLead Entity</span>
+                  </h2>
+                  <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem", marginTop: "0.15rem" }}>
+                    {user.plano ? `Plano: ${user.plano.charAt(0).toUpperCase() + user.plano.slice(1)}` : "Plano gratuito"}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <Logo size={28} />
+            )}
+          </div>
+
+        <nav style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
           {items.map((item) => (
             <NavLink
               key={item.to}
@@ -182,7 +194,7 @@ export default function AppLayout() {
           ))}
         </nav>
 
-        <div style={{ borderTop: "1px solid rgba(45,56,71,0.5)", paddingTop: "1rem" }}>
+        <div style={{ borderTop: "1px solid rgba(45,56,71,0.5)", paddingTop: "1rem", marginTop: "0.5rem" }}>
           {!collapsed ? (
             <>
               <div style={{ padding: "0.5rem 0.75rem", marginBottom: "0.5rem" }}>
@@ -214,6 +226,7 @@ export default function AppLayout() {
           )}
         </div>
       </aside>
+      </div>
 
       {/* Main content – offset by sidebar width, independently scrollable */}
       <main style={{ flex: 1, marginLeft: sidebarWidth, minHeight: "100vh", overflowY: "auto", display: "flex", flexDirection: "column", transition: "margin-left 0.25s ease" }}>

@@ -339,6 +339,73 @@ class ETLOrchestrator:
         self._process_and_load_phase()
         self._create_indexes_phase()
 
+    def run_recreate_etl(self) -> None:
+        """
+        Execute ETL pipeline in RECREATE mode: drops all RFB data tables
+        and recreates them from scratch before importing.
+        """
+        start_time = time.time()
+        self._logger.info("Starting RFB ETL process (RECREATE mode)")
+        self._log_processing_configuration()
+
+        try:
+            # Phase 0: Drop and recreate tables
+            _progress_update("recreate", "Recriando banco de dados...", 0,
+                             "Removendo tabelas existentes")
+            self._logger.info("Phase 0: Dropping and recreating tables")
+            self._recreate_tables()
+
+            # Phase 1: Download files
+            _progress_update("download", "Iniciando downloads...", 5)
+            self._logger.info("Phase 1: Discovering and downloading files")
+            downloaded_files = self._download_phase()
+
+            # Phase 2: Extract files
+            _progress_update("extract", "Extraindo arquivos...", 25)
+            self._logger.info("Phase 2: Extracting files")
+            self._extract_phase(downloaded_files)
+
+            # Phase 3: Process and load data
+            _progress_update("process", "Processando dados...", 40)
+            self._logger.info("Phase 3: Processing and loading data")
+            self._process_and_load_phase()
+
+            # Phase 4: Create indexes
+            _progress_update("index", "Criando índices...", 95)
+            self._logger.info("Phase 4: Creating database indexes")
+            self._create_indexes_phase()
+
+            end_time = time.time()
+            total_time = end_time - start_time
+
+            _progress_update("done", "Concluído!", 100,
+                             f"Tempo total: {total_time/60:.1f} min (modo recriação)")
+
+            self._logger.info(
+                f"ETL RECREATE process completed in {total_time:.2f} seconds "
+                f"({total_time/60:.2f} minutes)"
+            )
+
+        except Exception as e:
+            _progress_update("error", "Falha no ETL", -1, str(e)[:200])
+            self._logger.error(f"ETL RECREATE process failed: {e}")
+            raise
+
+    def _recreate_tables(self) -> None:
+        """Drop all RFB data tables and recreate them empty."""
+        tables = [
+            "empresa", "estabelecimento", "socios", "simples",
+            "cnae", "moti", "munic", "natju", "pais", "quals",
+        ]
+        self.database_manager.initialize_connection()
+        with self.database_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                for tbl in tables:
+                    self._logger.info(f"Dropping table {tbl}")
+                    cur.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
+                conn.commit()
+        self._logger.info("All RFB tables dropped. They will be recreated during processing.")
+
 
 def main():
     """

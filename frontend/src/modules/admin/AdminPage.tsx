@@ -1,11 +1,152 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, memo, useMemo, useTransition } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { adminApi, searchApi, type Stats, type EtlProgress, type AdminUser, type ExtractionInfo } from "../../shared/api";
 import { useAuth } from "../../shared/store";
 import { Navigate } from "react-router-dom";
 
+/* ═══════════════════════════════════════════════════════════
+   Password Confirmation Modal (reusable)
+   ═══════════════════════════════════════════════════════════ */
+
+interface PasswordModalProps {
+  open: boolean;
+  title: string;
+  description?: string;
+  danger?: boolean;
+  loading?: boolean;
+  error?: string | null;
+  onConfirm: (senha: string) => void;
+  onCancel: () => void;
+}
+
+const PasswordModal = memo(function PasswordModal({
+  open, title, description, danger, loading, error, onConfirm, onCancel,
+}: PasswordModalProps) {
+  const [senha, setSenha] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setSenha("");
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (senha.length > 0 && !loading) onConfirm(senha);
+  };
+
+  return (
+    <div style={overlayStyle} onClick={onCancel}>
+      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
+          <span style={{ fontSize: "1.3rem" }}>{danger ? "⚠️" : "🔒"}</span>
+          <h3 style={{ color: "#fff", margin: 0, fontSize: "1rem", fontWeight: 700 }}>{title}</h3>
+        </div>
+        {description && (
+          <p style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.85rem", margin: "0 0 1rem 0" }}>
+            {description}
+          </p>
+        )}
+        <form onSubmit={handleSubmit}>
+          <label style={labelSm}>Digite sua senha para confirmar</label>
+          <input
+            ref={inputRef}
+            className="input"
+            type="password"
+            placeholder="Sua senha de administrador"
+            value={senha}
+            onChange={(e) => setSenha(e.target.value)}
+            autoComplete="current-password"
+            style={{ marginBottom: "0.75rem" }}
+          />
+          {error && <p style={{ color: "#fca5a5", fontSize: "0.8rem", margin: "0 0 0.75rem 0" }}>{error}</p>}
+          <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+            <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={loading}>
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className={`btn ${danger ? "btn-danger" : "btn-primary"}`}
+              disabled={!senha || loading}
+            >
+              {loading ? "Verificando..." : "Confirmar"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+});
+
+/* Hook to manage password-confirmed actions */
+function usePasswordAction<TArgs extends unknown[], TResult>(
+  actionFn: (...args: [...TArgs, string]) => Promise<TResult>,
+  opts?: {
+    title?: string;
+    description?: string;
+    danger?: boolean;
+    onSuccess?: (result: TResult) => void;
+    onError?: (err: Error) => void;
+  },
+) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const argsRef = useRef<TArgs | null>(null);
+
+  const trigger = useCallback((...args: TArgs) => {
+    argsRef.current = args;
+    setError(null);
+    setModalOpen(true);
+  }, []);
+
+  const confirm = useCallback(async (senha: string) => {
+    if (!argsRef.current) return;
+    setPending(true);
+    setError(null);
+    try {
+      const result = await (actionFn as Function)(...argsRef.current, senha) as TResult;
+      setModalOpen(false);
+      opts?.onSuccess?.(result);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      setError(msg);
+      opts?.onError?.(err as Error);
+    } finally {
+      setPending(false);
+    }
+  }, [actionFn, opts]);
+
+  const cancel = useCallback(() => {
+    setModalOpen(false);
+    setError(null);
+    argsRef.current = null;
+  }, []);
+
+  const modal = useMemo(() => ({
+    open: modalOpen,
+    title: opts?.title ?? "Confirmar Ação",
+    description: opts?.description,
+    danger: opts?.danger,
+    loading: pending,
+    error,
+    onConfirm: confirm,
+    onCancel: cancel,
+  }), [modalOpen, opts?.title, opts?.description, opts?.danger, pending, error, confirm, cancel]);
+
+  return { trigger, modal };
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Main Page
+   ═══════════════════════════════════════════════════════════ */
+
 export default function AdminPage() {
-  const { user, fetchUser } = useAuth();
+  const { user } = useAuth();
 
   if (!user || !["admin", "super_admin"].includes(user.role)) {
     return <Navigate to="/dashboard" replace />;
@@ -27,7 +168,7 @@ export default function AdminPage() {
 
 /* ─── Stats ──────────────────────────────────────────────── */
 
-function StatsSection() {
+const StatsSection = memo(function StatsSection() {
   const { data: stats } = useQuery<Stats>({ queryKey: ["admin-stats"], queryFn: adminApi.stats });
 
   return (
@@ -38,40 +179,43 @@ function StatsSection() {
       <StatCard label="Fila" value={stats?.fila_tamanho ?? 0} />
     </div>
   );
-}
+});
 
-function StatCard({ label, value }: { label: string; value: number }) {
+const StatCard = memo(function StatCard({ label, value }: { label: string; value: number }) {
   return (
     <div className="glass-strong" style={{ padding: "1.25rem" }}>
       <p style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.8rem" }}>{label}</p>
       <p style={{ color: "#fff", fontSize: "1.75rem", fontWeight: 700 }}>{value.toLocaleString("pt-BR")}</p>
     </div>
   );
-}
+});
 
 /* ─── Extractions Lookup ─────────────────────────────────── */
 
-function ExtractionsSection() {
+const ExtractionsSection = memo(function ExtractionsSection() {
   const [searchTerm, setSearchTerm] = useState("");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<ExtractionInfo | null>(null);
+  const [, startTransition] = useTransition();
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin-extractions", query, page],
     queryFn: () => adminApi.searchExtractions(query, page),
-    placeholderData: (prev) => prev,
+    placeholderData: (prev: unknown) => prev,
   });
 
-  const handleSearch = () => { setQuery(searchTerm); setPage(1); };
+  const handleSearch = useCallback(() => {
+    startTransition(() => { setQuery(searchTerm); setPage(1); });
+  }, [searchTerm]);
 
-  const formatParams = (params: Record<string, unknown>) => {
+  const formatParams = useCallback((params: Record<string, unknown>) => {
     return Object.entries(params)
       .filter(([, v]) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0))
       .filter(([k]) => !["page", "limit"].includes(k))
       .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
       .join(" | ");
-  };
+  }, []);
 
   return (
     <div className="glass-strong" style={{ padding: "1.5rem", marginBottom: "1.5rem" }}>
@@ -162,41 +306,7 @@ function ExtractionsSection() {
               </thead>
               <tbody>
                 {data.extractions.map((ext) => (
-                  <tr key={ext.search_id} style={{ cursor: "pointer" }} onClick={() => setSelected(ext)}>
-                    <td style={{ ...tdAdminStyle, fontFamily: "monospace", fontSize: "0.8rem" }}>{ext.search_id}</td>
-                    <td style={tdAdminStyle}>{ext.usuario?.nome ?? "—"}</td>
-                    <td>
-                      <span className={`badge ${ext.status === "processada" ? "badge-success" : ext.status === "erro" ? "badge-danger" : ext.status === "processando" ? "badge-warning" : "badge-success"}`} style={{ fontSize: "0.7rem" }}>
-                        {ext.status}
-                      </span>
-                    </td>
-                    <td>
-                      {ext.file_id && ext.status === "processada" ? (
-                        <div style={{ display: "flex", gap: "0.25rem" }}>
-                          <button
-                            className="btn btn-ghost"
-                            style={{ fontSize: "0.65rem", padding: "0.15rem 0.35rem", color: "#86efac" }}
-                            onClick={(e) => { e.stopPropagation(); searchApi.downloadFile(ext.file_id!, "csv"); }}
-                          >
-                            CSV
-                          </button>
-                          <button
-                            className="btn btn-ghost"
-                            style={{ fontSize: "0.65rem", padding: "0.15rem 0.35rem", color: "#86efac" }}
-                            onClick={(e) => { e.stopPropagation(); searchApi.downloadFile(ext.file_id!, "xlsx"); }}
-                          >
-                            XLSX
-                          </button>
-                        </div>
-                      ) : (
-                        <span style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.8rem" }}>—</span>
-                      )}
-                    </td>
-                    <td style={tdAdminStyle}>{ext.quantidade_processada?.toLocaleString("pt-BR") ?? "—"}</td>
-                    <td style={tdAdminStyle}>{ext.credits_consumed.toLocaleString("pt-BR")}</td>
-                    <td style={tdAdminStyle}>{ext.created_at ? new Date(ext.created_at).toLocaleString("pt-BR") : "—"}</td>
-                    <td><button className="btn btn-ghost" style={actionBtnStyle}>Ver</button></td>
-                  </tr>
+                  <ExtractionRow key={ext.search_id} ext={ext} onSelect={setSelected} />
                 ))}
               </tbody>
             </table>
@@ -212,11 +322,51 @@ function ExtractionsSection() {
       ) : null}
     </div>
   );
-}
+});
+
+const ExtractionRow = memo(function ExtractionRow({ ext, onSelect }: { ext: ExtractionInfo; onSelect: (e: ExtractionInfo) => void }) {
+  return (
+    <tr style={{ cursor: "pointer" }} onClick={() => onSelect(ext)}>
+      <td style={{ ...tdAdminStyle, fontFamily: "monospace", fontSize: "0.8rem" }}>{ext.search_id}</td>
+      <td style={tdAdminStyle}>{ext.usuario?.nome ?? "—"}</td>
+      <td>
+        <span className={`badge ${ext.status === "processada" ? "badge-success" : ext.status === "erro" ? "badge-danger" : ext.status === "processando" ? "badge-warning" : "badge-success"}`} style={{ fontSize: "0.7rem" }}>
+          {ext.status}
+        </span>
+      </td>
+      <td>
+        {ext.file_id && ext.status === "processada" ? (
+          <div style={{ display: "flex", gap: "0.25rem" }}>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: "0.65rem", padding: "0.15rem 0.35rem", color: "#86efac" }}
+              onClick={(e) => { e.stopPropagation(); searchApi.downloadFile(ext.file_id!, "csv"); }}
+            >
+              CSV
+            </button>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: "0.65rem", padding: "0.15rem 0.35rem", color: "#86efac" }}
+              onClick={(e) => { e.stopPropagation(); searchApi.downloadFile(ext.file_id!, "xlsx"); }}
+            >
+              XLSX
+            </button>
+          </div>
+        ) : (
+          <span style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.8rem" }}>—</span>
+        )}
+      </td>
+      <td style={tdAdminStyle}>{ext.quantidade_processada?.toLocaleString("pt-BR") ?? "—"}</td>
+      <td style={tdAdminStyle}>{ext.credits_consumed.toLocaleString("pt-BR")}</td>
+      <td style={tdAdminStyle}>{ext.created_at ? new Date(ext.created_at).toLocaleString("pt-BR") : "—"}</td>
+      <td><button className="btn btn-ghost" style={actionBtnStyle}>Ver</button></td>
+    </tr>
+  );
+});
 
 /* ─── Queue ──────────────────────────────────────────────── */
 
-function QueueSection() {
+const QueueSection = memo(function QueueSection() {
   const queryClient = useQueryClient();
   const { data: queue } = useQuery({ queryKey: ["admin-queue"], queryFn: adminApi.getQueue });
   const toggleMut = useMutation({
@@ -244,7 +394,7 @@ function QueueSection() {
       </div>
     </div>
   );
-}
+});
 
 /* ─── UF Management ──────────────────────────────────────── */
 
@@ -253,7 +403,7 @@ const UF_LIST = [
   "PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO",
 ];
 
-function UfManagementSection() {
+const UfManagementSection = memo(function UfManagementSection() {
   const queryClient = useQueryClient();
   const { data: ufData } = useQuery<Record<string, boolean>>({
     queryKey: ["admin-ufs"],
@@ -292,13 +442,13 @@ function UfManagementSection() {
       </div>
     </div>
   );
-}
+});
 
 /* ─── Users ──────────────────────────────────────────────── */
 
 const PLAN_OPTIONS = ["basico", "profissional", "negocios", "corporativo", "enterprise"];
 
-function UsersSection() {
+const UsersSection = memo(function UsersSection() {
   const queryClient = useQueryClient();
   const { fetchUser } = useAuth();
   const [page, setPage] = useState(1);
@@ -307,37 +457,47 @@ function UsersSection() {
     queryFn: () => adminApi.users(page),
   });
 
-  // Block user
-  const blockMut = useMutation({
-    mutationFn: (userId: number) => adminApi.blockUser(userId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-users"] }),
-  });
+  /* ── Password-confirmed actions ── */
+  const blockAction = usePasswordAction(
+    useCallback((userId: number, senha: string) => adminApi.blockUser(userId, senha), []),
+    useMemo(() => ({
+      title: "Bloquear / Desbloquear Usuário",
+      description: "Esta ação altera o acesso do usuário à plataforma.",
+      danger: true,
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-users"] }),
+    }), [queryClient]),
+  );
+
+  const roleAction = usePasswordAction(
+    useCallback((userId: number, role: string, senha: string) => adminApi.changeRole(userId, role, senha), []),
+    useMemo(() => ({
+      title: "Alterar Nível de Acesso",
+      description: "Confirme sua senha para alterar o nível do usuário.",
+      danger: true,
+      onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["admin-users"] }); fetchUser(); },
+    }), [queryClient, fetchUser]),
+  );
 
   // Adjust credits modal
   const [adjustModal, setAdjustModal] = useState<{ userId: number; nome: string } | null>(null);
   const [adjustQty, setAdjustQty] = useState("");
   const [adjustMotivo, setAdjustMotivo] = useState("");
-  const adjustMut = useMutation({
-    mutationFn: ({ userId, quantidade, motivo }: { userId: number; quantidade: number; motivo: string }) =>
-      adminApi.adjustCredits(userId, quantidade, motivo),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      fetchUser();
-      setAdjustModal(null);
-      setAdjustQty("");
-      setAdjustMotivo("");
-    },
-  });
 
-  // Change role
-  const roleMut = useMutation({
-    mutationFn: ({ userId, role }: { userId: number; role: string }) =>
-      adminApi.changeRole(userId, role),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      fetchUser();
-    },
-  });
+  const adjustAction = usePasswordAction(
+    useCallback((userId: number, quantidade: number, motivo: string, senha: string) =>
+      adminApi.adjustCredits(userId, quantidade, motivo, senha), []),
+    useMemo(() => ({
+      title: "Ajustar Créditos",
+      description: "Confirme sua senha para ajustar créditos do usuário.",
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+        fetchUser();
+        setAdjustModal(null);
+        setAdjustQty("");
+        setAdjustMotivo("");
+      },
+    }), [queryClient, fetchUser]),
+  );
 
   // Create user modal
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -362,20 +522,24 @@ function UsersSection() {
   const [subPermanente, setSubPermanente] = useState(false);
   const [subDias, setSubDias] = useState("30");
   const [subCreditos, setSubCreditos] = useState("");
-  const subMut = useMutation({
-    mutationFn: () =>
-      adminApi.setSubscription(subModal!.userId, {
-        plano: subPlano,
-        permanente: subPermanente,
-        dias_validade: subPermanente ? undefined : parseInt(subDias) || 30,
-        creditos: subCreditos ? parseInt(subCreditos) : undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      fetchUser();
-      setSubModal(null);
-    },
-  });
+
+  const subAction = usePasswordAction(
+    useCallback((userId: number, subData: { plano: string; permanente: boolean; dias_validade?: number; creditos?: number }, senha: string) =>
+      adminApi.setSubscription(userId, subData, senha), []),
+    useMemo(() => ({
+      title: "Definir Assinatura",
+      description: "Confirme sua senha para definir a assinatura do usuário.",
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+        fetchUser();
+        setSubModal(null);
+      },
+    }), [queryClient, fetchUser]),
+  );
+
+  const handleRoleSelect = useCallback((userId: number, role: string) => {
+    roleAction.trigger(userId, role);
+  }, [roleAction]);
 
   return (
     <div className="glass-strong" style={{ padding: "1.5rem", marginBottom: "1.5rem" }}>
@@ -385,6 +549,12 @@ function UsersSection() {
           + Criar Conta
         </button>
       </div>
+
+      {/* Password modals */}
+      <PasswordModal {...blockAction.modal} />
+      <PasswordModal {...roleAction.modal} />
+      <PasswordModal {...adjustAction.modal} />
+      <PasswordModal {...subAction.modal} />
 
       {/* Create User Modal */}
       {showCreateModal && (
@@ -435,11 +605,11 @@ function UsersSection() {
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             <input className="input" style={{ maxWidth: 120 }} type="number" placeholder="Quantidade" value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} />
             <input className="input" style={{ flex: 1, minWidth: 160 }} placeholder="Motivo" value={adjustMotivo} onChange={(e) => setAdjustMotivo(e.target.value)} />
-            <button className="btn btn-primary" disabled={!adjustQty || !adjustMotivo || adjustMut.isPending}
+            <button className="btn btn-primary" disabled={!adjustQty || !adjustMotivo}
               onClick={() => {
                 const qty = parseInt(adjustQty);
                 if (isNaN(qty)) return;
-                adjustMut.mutate({ userId: adjustModal.userId, quantidade: qty, motivo: adjustMotivo });
+                adjustAction.trigger(adjustModal.userId, qty, adjustMotivo);
               }}>
               Aplicar
             </button>
@@ -481,13 +651,17 @@ function UsersSection() {
               <input className="input" type="number" min="0" value={subCreditos} onChange={(e) => setSubCreditos(e.target.value)} placeholder="Adicionar créditos" />
             </div>
           </div>
-          {subMut.isError && (
-            <p style={{ color: "#fca5a5", fontSize: "0.8rem", marginTop: "0.5rem" }}>{subMut.error?.message}</p>
-          )}
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
-            <button className="btn btn-primary" disabled={subMut.isPending}
-              onClick={() => subMut.mutate()}>
-              {subMut.isPending ? "Salvando..." : "Definir Assinatura"}
+            <button className="btn btn-primary"
+              onClick={() => {
+                subAction.trigger(subModal!.userId, {
+                  plano: subPlano,
+                  permanente: subPermanente,
+                  dias_validade: subPermanente ? undefined : parseInt(subDias) || 30,
+                  creditos: subCreditos ? parseInt(subCreditos) : undefined,
+                });
+              }}>
+              Definir Assinatura
             </button>
             <button className="btn btn-ghost" onClick={() => setSubModal(null)}>Cancelar</button>
           </div>
@@ -510,80 +684,15 @@ function UsersSection() {
           </thead>
           <tbody>
             {data?.users?.map((u: AdminUser) => (
-              <tr key={u.id}>
-                <td style={tdAdminStyle}>{u.id}</td>
-                <td style={tdAdminStyle}>
-                  {u.nome}
-                  {u.is_env_admin && (
-                    <span style={{ marginLeft: 6, background: "rgba(139,92,246,0.3)", color: "#c4b5fd", borderRadius: 4, fontSize: "0.6rem", padding: "0.1rem 0.35rem", fontWeight: 700 }}>
-                      PRINCIPAL
-                    </span>
-                  )}
-                </td>
-                <td style={tdAdminStyle}>{u.email}</td>
-                <td>
-                  {u.is_env_admin ? (
-                    <span className="badge badge-success" style={{ fontSize: "0.7rem" }}>Super Admin</span>
-                  ) : u.role === "super_admin" ? (
-                    <span className="badge badge-success" style={{ fontSize: "0.7rem" }}>Super Admin</span>
-                  ) : (
-                    <select
-                      className="input select"
-                      style={{ fontSize: "0.75rem", padding: "0.2rem 0.4rem", minWidth: 90 }}
-                      value={u.role}
-                      onChange={(e) => roleMut.mutate({ userId: u.id, role: e.target.value })}
-                      disabled={roleMut.isPending}
-                    >
-                      <option value="user">Usuário</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  )}
-                </td>
-                <td style={tdAdminStyle}>
-                  {u.plano ? (
-                    <span>
-                      <span>{u.plano.charAt(0).toUpperCase() + u.plano.slice(1)}</span>
-                      {u.plano_manual && (
-                        <span style={{ marginLeft: 4, color: "rgba(255,255,255,0.4)", fontSize: "0.65rem" }}>manual</span>
-                      )}
-                      {u.plano_permanente === true && (
-                        <span style={{ marginLeft: 4, color: "#86efac", fontSize: "0.65rem" }}>∞</span>
-                      )}
-                      {u.plano_validade && (
-                        <span style={{ marginLeft: 4, color: "rgba(255,255,255,0.4)", fontSize: "0.65rem" }}>
-                          até {new Date(u.plano_validade).toLocaleDateString("pt-BR")}
-                        </span>
-                      )}
-                    </span>
-                  ) : (
-                    <span style={{ color: "rgba(255,255,255,0.3)" }}>—</span>
-                  )}
-                </td>
-                <td style={tdAdminStyle}>{u.saldo_creditos.toLocaleString("pt-BR")}</td>
-                <td>
-                  <span className={`badge ${u.ativo ? "badge-success" : "badge-danger"}`}>
-                    {u.ativo ? "Sim" : "Não"}
-                  </span>
-                </td>
-                <td>
-                  <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
-                    <button className="btn btn-ghost" style={actionBtnStyle}
-                      onClick={() => setAdjustModal({ userId: u.id, nome: u.nome })}>
-                      Créditos
-                    </button>
-                    <button className="btn btn-ghost" style={actionBtnStyle}
-                      onClick={() => { setSubModal({ userId: u.id, nome: u.nome }); setSubPlano(u.plano || "basico"); }}>
-                      Plano
-                    </button>
-                    {!u.is_env_admin && u.role !== "super_admin" && (
-                      <button className="btn btn-ghost" style={actionBtnStyle}
-                        onClick={() => blockMut.mutate(u.id)} disabled={blockMut.isPending}>
-                        {u.ativo ? "Bloquear" : "Desbloquear"}
-                      </button>
-                    )}
-                  </div>
-                </td>
-              </tr>
+              <UserRow
+                key={u.id}
+                u={u}
+                onBlock={(id) => blockAction.trigger(id)}
+                onRoleChange={handleRoleSelect}
+                onAdjust={(id, nome) => setAdjustModal({ userId: id, nome })}
+                onSub={(id, nome, plano) => { setSubModal({ userId: id, nome }); setSubPlano(plano || "basico"); }}
+                roleChangePending={false}
+              />
             ))}
           </tbody>
         </table>
@@ -596,11 +705,99 @@ function UsersSection() {
       </div>
     </div>
   );
+});
+
+interface UserRowProps {
+  u: AdminUser;
+  onBlock: (id: number) => void;
+  onRoleChange: (id: number, role: string) => void;
+  onAdjust: (id: number, nome: string) => void;
+  onSub: (id: number, nome: string, plano: string | null) => void;
+  roleChangePending: boolean;
 }
+
+const UserRow = memo(function UserRow({ u, onBlock, onRoleChange, onAdjust, onSub, roleChangePending }: UserRowProps) {
+  return (
+    <tr>
+      <td style={tdAdminStyle}>{u.id}</td>
+      <td style={tdAdminStyle}>
+        {u.nome}
+        {u.is_env_admin && (
+          <span style={{ marginLeft: 6, background: "rgba(139,92,246,0.3)", color: "#c4b5fd", borderRadius: 4, fontSize: "0.6rem", padding: "0.1rem 0.35rem", fontWeight: 700 }}>
+            PRINCIPAL
+          </span>
+        )}
+      </td>
+      <td style={tdAdminStyle}>{u.email}</td>
+      <td>
+        {u.is_env_admin ? (
+          <span className="badge badge-success" style={{ fontSize: "0.7rem" }}>Super Admin</span>
+        ) : u.role === "super_admin" ? (
+          <span className="badge badge-success" style={{ fontSize: "0.7rem" }}>Super Admin</span>
+        ) : (
+          <select
+            className="input select"
+            style={{ fontSize: "0.75rem", padding: "0.2rem 0.4rem", minWidth: 90 }}
+            value={u.role}
+            onChange={(e) => onRoleChange(u.id, e.target.value)}
+            disabled={roleChangePending}
+          >
+            <option value="user">Usuário</option>
+            <option value="admin">Admin</option>
+          </select>
+        )}
+      </td>
+      <td style={tdAdminStyle}>
+        {u.plano ? (
+          <span>
+            <span>{u.plano.charAt(0).toUpperCase() + u.plano.slice(1)}</span>
+            {u.plano_manual && (
+              <span style={{ marginLeft: 4, color: "rgba(255,255,255,0.4)", fontSize: "0.65rem" }}>manual</span>
+            )}
+            {u.plano_permanente === true && (
+              <span style={{ marginLeft: 4, color: "#86efac", fontSize: "0.65rem" }}>∞</span>
+            )}
+            {u.plano_validade && (
+              <span style={{ marginLeft: 4, color: "rgba(255,255,255,0.4)", fontSize: "0.65rem" }}>
+                até {new Date(u.plano_validade).toLocaleDateString("pt-BR")}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span style={{ color: "rgba(255,255,255,0.3)" }}>—</span>
+        )}
+      </td>
+      <td style={tdAdminStyle}>{u.saldo_creditos.toLocaleString("pt-BR")}</td>
+      <td>
+        <span className={`badge ${u.ativo ? "badge-success" : "badge-danger"}`}>
+          {u.ativo ? "Sim" : "Não"}
+        </span>
+      </td>
+      <td>
+        <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+          <button className="btn btn-ghost" style={actionBtnStyle}
+            onClick={() => onAdjust(u.id, u.nome)}>
+            Créditos
+          </button>
+          <button className="btn btn-ghost" style={actionBtnStyle}
+            onClick={() => onSub(u.id, u.nome, u.plano)}>
+            Plano
+          </button>
+          {!u.is_env_admin && u.role !== "super_admin" && (
+            <button className="btn btn-ghost" style={actionBtnStyle}
+              onClick={() => onBlock(u.id)}>
+              {u.ativo ? "Bloquear" : "Desbloquear"}
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+});
 
 /* ─── Logs ───────────────────────────────────────────────── */
 
-function LogsSection() {
+const LogsSection = memo(function LogsSection() {
   const { data: logs } = useQuery({ queryKey: ["admin-logs"], queryFn: () => adminApi.logs(50) });
 
   return (
@@ -621,14 +818,7 @@ function LogsSection() {
             </thead>
             <tbody>
               {logs.map((log: Record<string, unknown>, i: number) => (
-                <tr key={i}>
-                  <td style={tdAdminStyle}>{log.created_at ? new Date(log.created_at as string).toLocaleString("pt-BR") : "—"}</td>
-                  <td style={tdAdminStyle}>{log.acao as string}</td>
-                  <td style={{ ...tdAdminStyle, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {log.detalhes ? JSON.stringify(log.detalhes) : "—"}
-                  </td>
-                  <td style={tdAdminStyle}>{(log.ip_address as string) || "—"}</td>
-                </tr>
+                <LogRow key={i} log={log} />
               ))}
             </tbody>
           </table>
@@ -636,12 +826,26 @@ function LogsSection() {
       )}
     </div>
   );
-}
+});
+
+const LogRow = memo(function LogRow({ log }: { log: Record<string, unknown> }) {
+  return (
+    <tr>
+      <td style={tdAdminStyle}>{log.created_at ? new Date(log.created_at as string).toLocaleString("pt-BR") : "—"}</td>
+      <td style={tdAdminStyle}>{log.acao as string}</td>
+      <td style={{ ...tdAdminStyle, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>
+        {log.detalhes ? JSON.stringify(log.detalhes) : "—"}
+      </td>
+      <td style={tdAdminStyle}>{(log.ip_address as string) || "—"}</td>
+    </tr>
+  );
+});
 
 /* ─── Maintenance ────────────────────────────────────────── */
 
 const PHASE_LABELS: Record<string, string> = {
   init: "Inicializando",
+  recreate: "Recriando Banco",
   download: "Download",
   extract: "Extração",
   process: "Processamento",
@@ -650,14 +854,14 @@ const PHASE_LABELS: Record<string, string> = {
   error: "Erro",
 };
 
-function MaintenanceSection() {
+const MaintenanceSection = memo(function MaintenanceSection() {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<EtlProgress | null>(null);
+  const [etlMode, setEtlMode] = useState<"atualizar" | "recriar">("atualizar");
   const eventSourceRef = useRef<EventSource | null>(null);
 
   // SSE connection for real-time ETL progress
   const connectSSE = useCallback(() => {
-    // Close existing connection if any
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
     }
@@ -669,7 +873,6 @@ function MaintenanceSection() {
         const data: EtlProgress = JSON.parse(event.data);
         setProgress(data);
 
-        // Refresh stats when ETL finishes
         if (data.phase === "done" || data.phase === "error") {
           queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
         }
@@ -680,7 +883,6 @@ function MaintenanceSection() {
 
     es.onerror = () => {
       es.close();
-      // Reconnect after 5s on error
       setTimeout(connectSSE, 5000);
     };
 
@@ -694,21 +896,37 @@ function MaintenanceSection() {
     };
   }, [connectSSE]);
 
-  const etlMut = useMutation({
-    mutationFn: adminApi.runEtl,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
-    },
-  });
+  /* Password-confirmed ETL action */
+  const etlAction = usePasswordAction(
+    useCallback((mode: "atualizar" | "recriar", senha: string) => adminApi.runEtl(mode, senha), []),
+    useMemo(() => ({
+      title: "Rodar ETL",
+      description: etlMode === "recriar"
+        ? "⚠️ ATENÇÃO: O modo RECRIAR irá apagar todas as tabelas RFB e reimportar do zero. Esta ação é irreversível!"
+        : "O ETL será executado no modo atualização, preservando dados existentes.",
+      danger: etlMode === "recriar",
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-stats"] }),
+    }), [etlMode, queryClient]),
+  );
 
-  const reindexMut = useMutation({
-    mutationFn: adminApi.reindex,
-  });
+  const reindexAction = usePasswordAction(
+    useCallback((senha: string) => adminApi.reindex(senha), []),
+    useMemo(() => ({
+      title: "Recriar Índices",
+      description: "Os índices do banco de dados serão recriados. Isso pode levar alguns minutos.",
+      onSuccess: () => {},
+    }), []),
+  );
 
-  const cacheMut = useMutation({
-    mutationFn: adminApi.clearCache,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-stats"] }),
-  });
+  const cacheAction = usePasswordAction(
+    useCallback((senha: string) => adminApi.clearCache(senha), []),
+    useMemo(() => ({
+      title: "Limpar Cache",
+      description: "Todo o cache Redis será apagado. As próximas consultas serão mais lentas.",
+      danger: true,
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-stats"] }),
+    }), [queryClient]),
+  );
 
   const isRunning = progress?.running && progress.phase !== "done" && progress.phase !== "error";
   const isDone = progress?.phase === "done";
@@ -719,30 +937,85 @@ function MaintenanceSection() {
     <div className="glass-strong" style={{ padding: "1.5rem" }}>
       <h2 style={sectionTitleStyle}>Manutenção</h2>
 
+      {/* Password modals */}
+      <PasswordModal {...etlAction.modal} />
+      <PasswordModal {...reindexAction.modal} />
+      <PasswordModal {...cacheAction.modal} />
+
+      {/* ETL Mode selector */}
+      <div style={{ marginBottom: "1rem" }}>
+        <label style={{ ...labelSm, marginBottom: "0.5rem" }}>Modo do ETL</label>
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <label style={{
+            display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer",
+            padding: "0.5rem 0.85rem", borderRadius: 8,
+            background: etlMode === "atualizar" ? "rgba(139,92,246,0.25)" : "rgba(255,255,255,0.05)",
+            border: etlMode === "atualizar" ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)",
+            transition: "all 0.2s",
+          }}>
+            <input
+              type="radio"
+              name="etlMode"
+              value="atualizar"
+              checked={etlMode === "atualizar"}
+              onChange={() => setEtlMode("atualizar")}
+              style={{ accentColor: "hsl(268,100%,60%)" }}
+            />
+            <div>
+              <span style={{ color: "#fff", fontSize: "0.85rem", fontWeight: 600 }}>Atualizar</span>
+              <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.75rem", margin: 0 }}>
+                Importa dados novos sem apagar os existentes (upsert)
+              </p>
+            </div>
+          </label>
+          <label style={{
+            display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer",
+            padding: "0.5rem 0.85rem", borderRadius: 8,
+            background: etlMode === "recriar" ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.05)",
+            border: etlMode === "recriar" ? "1px solid rgba(239,68,68,0.4)" : "1px solid rgba(255,255,255,0.1)",
+            transition: "all 0.2s",
+          }}>
+            <input
+              type="radio"
+              name="etlMode"
+              value="recriar"
+              checked={etlMode === "recriar"}
+              onChange={() => setEtlMode("recriar")}
+              style={{ accentColor: "#ef4444" }}
+            />
+            <div>
+              <span style={{ color: etlMode === "recriar" ? "#fca5a5" : "#fff", fontSize: "0.85rem", fontWeight: 600 }}>Recriar Banco</span>
+              <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.75rem", margin: 0 }}>
+                Apaga todas as tabelas e reimporta do zero
+              </p>
+            </div>
+          </label>
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: isRunning || isDone || isError ? "1.25rem" : 0 }}>
         <button
-          className="btn btn-primary"
-          onClick={() => etlMut.mutate()}
-          disabled={!!isRunning || etlMut.isPending}
+          className={`btn ${etlMode === "recriar" ? "btn-danger" : "btn-primary"}`}
+          onClick={() => etlAction.trigger(etlMode)}
+          disabled={!!isRunning}
         >
-          {isRunning ? "⏳ ETL em execução..." : "🔄 Rodar ETL"}
+          {isRunning ? "⏳ ETL em execução..." : etlMode === "recriar" ? "⚠️ Recriar Banco + ETL" : "🔄 Rodar ETL"}
         </button>
         <button
           className="btn btn-ghost"
-          onClick={() => reindexMut.mutate()}
-          disabled={!!isRunning || reindexMut.isPending}
+          onClick={() => reindexAction.trigger()}
+          disabled={!!isRunning}
         >
-          {reindexMut.isPending ? "Reindexando..." : "🗂️ Recriar Índices"}
+          🗂️ Recriar Índices
         </button>
-        <button className="btn btn-ghost" onClick={() => cacheMut.mutate()} disabled={cacheMut.isPending}>
-          {cacheMut.isPending ? "Limpando..." : "🧹 Limpar Cache"}
+        <button className="btn btn-ghost" onClick={() => cacheAction.trigger()}>
+          🧹 Limpar Cache
         </button>
       </div>
 
       {/* ── ETL Progress Bar ── */}
       {(isRunning || isDone || isError) && (
         <div style={{ marginTop: "0.25rem" }}>
-          {/* Phase label + step */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "0.5rem" }}>
             <span style={{ color: isError ? "#fca5a5" : "#fff", fontWeight: 600, fontSize: "0.9rem" }}>
               {PHASE_LABELS[progress?.phase ?? ""] ?? progress?.phase}
@@ -752,7 +1025,6 @@ function MaintenanceSection() {
             </span>
           </div>
 
-          {/* Bar track */}
           <div style={{
             width: "100%",
             height: 22,
@@ -761,7 +1033,6 @@ function MaintenanceSection() {
             overflow: "hidden",
             position: "relative",
           }}>
-            {/* Fill */}
             <div style={{
               width: `${isError ? 100 : Math.max(pct, 0)}%`,
               height: "100%",
@@ -773,7 +1044,6 @@ function MaintenanceSection() {
                   : "linear-gradient(135deg, hsl(268,100%,60%), hsl(213,100%,60%))",
               transition: "width 0.6s ease",
             }} />
-            {/* Percentage text */}
             {!isError && (
               <span style={{
                 position: "absolute",
@@ -794,7 +1064,6 @@ function MaintenanceSection() {
             )}
           </div>
 
-          {/* Detail line */}
           {progress?.detail && (
             <p style={{
               color: isError ? "#fca5a5" : "rgba(255,255,255,0.5)",
@@ -808,25 +1077,40 @@ function MaintenanceSection() {
       )}
 
       {/* mutation-level messages */}
-      {etlMut.isError && !isRunning && (
+      {cacheAction.modal.error && !cacheAction.modal.open && (
         <p style={{ color: "#fca5a5", marginTop: "0.5rem", fontSize: "0.875rem" }}>
-          {etlMut.error?.message}
-        </p>
-      )}
-      {reindexMut.isError && !isRunning && (
-        <p style={{ color: "#fca5a5", marginTop: "0.5rem", fontSize: "0.875rem" }}>
-          {reindexMut.error?.message}
-        </p>
-      )}
-      {cacheMut.isSuccess && <p style={{ color: "#86efac", marginTop: "0.5rem", fontSize: "0.875rem" }}>Cache limpo!</p>}
-      {cacheMut.isError && (
-        <p style={{ color: "#fca5a5", marginTop: "0.5rem", fontSize: "0.875rem" }}>
-          {cacheMut.error?.message}
+          {cacheAction.modal.error}
         </p>
       )}
     </div>
   );
-}
+});
+
+/* ─── Shared styles ──────────────────────────────────────── */
+
+const overlayStyle: React.CSSProperties = {
+  position: "fixed",
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  background: "rgba(0,0,0,0.6)",
+  backdropFilter: "blur(4px)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 9999,
+};
+
+const modalStyle: React.CSSProperties = {
+  background: "linear-gradient(135deg, rgba(30,20,50,0.98), rgba(15,10,35,0.98))",
+  border: "1px solid rgba(139,92,246,0.3)",
+  borderRadius: 12,
+  padding: "1.5rem",
+  minWidth: 360,
+  maxWidth: 440,
+  boxShadow: "0 25px 50px rgba(0,0,0,0.5)",
+};
 
 const sectionTitleStyle: React.CSSProperties = { color: "#fff", fontSize: "1.125rem", fontWeight: 600, marginBottom: "1rem" };
 const thAdminStyle: React.CSSProperties = { color: "rgba(255,255,255,0.5)" };

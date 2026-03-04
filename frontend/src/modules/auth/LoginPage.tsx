@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Link, useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "../../shared/store";
+import Logo from "../../shared/ui/Logo";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -49,7 +50,10 @@ export default function LoginPage() {
       }}
     >
       <div className="glass-strong animate-in" style={{ padding: "2.5rem", width: "100%", maxWidth: 420 }}>
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 700, textAlign: "center", marginBottom: "0.5rem" }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: "1rem" }}>
+          <Logo size={56} />
+        </div>
+        <h1 style={{ fontSize: "1.4rem", fontWeight: 700, textAlign: "center", marginBottom: "0.5rem" }}>
           <span style={{ background: "linear-gradient(135deg, hsl(268,100%,60%), hsl(213,100%,60%))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>IgaraLead Entity</span>
         </h1>
         <p style={{ color: "rgba(255,255,255,0.45)", textAlign: "center", fontSize: "0.875rem", marginBottom: "2rem" }}>
