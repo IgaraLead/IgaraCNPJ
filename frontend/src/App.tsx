@@ -11,6 +11,7 @@ import HistoryPage from "./modules/history/HistoryPage";
 import PlansPage from "./modules/plans/PlansPage";
 import SettingsPage from "./modules/settings/SettingsPage";
 import AdminPage from "./modules/admin/AdminPage";
+import ParticleCanvas from "./shared/ui/ParticleCanvas";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -19,6 +20,7 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      <ParticleCanvas />
       <BrowserRouter>
         <Routes>
           {/* Public routes */}

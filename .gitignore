@@ -58,3 +58,4 @@ exports/
 .coverage
 htmlcov/
 .pytest_cache/
+Entity.code-workspace
