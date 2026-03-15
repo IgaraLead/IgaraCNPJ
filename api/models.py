@@ -25,6 +25,10 @@ class Usuario(Base):
     ativo = Column(Boolean, default=True)
     criado_em = Column(DateTime, default=lambda: datetime.datetime.now(timezone.utc))
 
+    # Hub integration
+    hub_id = Column(String(36), unique=True, nullable=True, index=True)
+    hub_synced_at = Column(DateTime, nullable=True)
+
     credito = relationship("Credito", back_populates="usuario", uselist=False)
     assinaturas = relationship("Assinatura", back_populates="usuario", order_by="Assinatura.criado_em.desc()")
     transacoes = relationship("CreditoTransacao", back_populates="usuario")

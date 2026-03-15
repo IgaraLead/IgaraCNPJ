@@ -28,6 +28,8 @@ class UsuarioOut(BaseModel):
     role: str
     ativo: bool
     criado_em: Optional[datetime] = None
+    hub_id: Optional[str] = None
+    hub_synced_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

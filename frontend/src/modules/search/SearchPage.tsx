@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { searchApi, type SearchParams, type SearchResult, type SearchResponse, type Municipio, type CnaeItem } from "../../shared/api";
+import { searchApi, integrationsApi, type SearchParams, type SearchResult, type SearchResponse, type Municipio, type CnaeItem, type IntegrationAction } from "../../shared/api";
 import { useAuth } from "../../shared/store";
 
 const UFS = [
@@ -487,6 +487,8 @@ export default function SearchPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showProcessModal, setShowProcessModal] = useState(false);
   const [processSubmitted, setProcessSubmitted] = useState(false);
+  const [integrationActions, setIntegrationActions] = useState<IntegrationAction[]>([]);
+  const [importingTo, setImportingTo] = useState<string | null>(null);
   const historyLoadedRef = useRef(false);
 
   // Fetch municipalities when UF changes
@@ -564,6 +566,31 @@ export default function SearchPage() {
     // Clear navigation state to avoid re-triggering
     navigate(location.pathname, { replace: true });
   }, [location.state]);
+
+  // Fetch available integration actions from Hub
+  useEffect(() => {
+    integrationsApi.getActions().then(res => {
+      setIntegrationActions(res.actions || []);
+    }).catch(() => {});
+  }, []);
+
+  const handleExportForImport = async (actionKey: string) => {
+    if (!data?.search_id) return;
+    const action = integrationActions.find(a => a.key === actionKey);
+    if (!action) return;
+    setImportingTo(actionKey);
+    try {
+      await integrationsApi.exportForImport(data.search_id, action.target, {
+        action_key: actionKey,
+        target_url: action.target_url,
+      });
+      alert(`Dados exportados para ${action.target === "nexus" ? "Nexus" : "CRM"} com sucesso!`);
+    } catch {
+      alert("Erro ao exportar dados. Tente novamente.");
+    } finally {
+      setImportingTo(null);
+    }
+  };
 
   const buildParams = (): SearchParams => {
     const params: SearchParams = { uf, page: 1, limit: 20 };
@@ -849,13 +876,35 @@ export default function SearchPage() {
                 Exibindo amostra de {data.results.length} resultados. Processe para acessar todos os dados.
               </p>
             </div>
-            <button
-              className="btn btn-primary"
-              onClick={() => setShowProcessModal(true)}
-              disabled={data.total === 0}
-            >
-              Processar / Exportar
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {integrationActions.find(a => a.key === "import_contacts_nexus") && (
+                <button
+                  className="btn"
+                  style={{ background: "rgba(0,112,255,0.2)", color: "#60a5fa", border: "1px solid rgba(0,112,255,0.3)" }}
+                  onClick={() => handleExportForImport("import_contacts_nexus")}
+                  disabled={data.total === 0 || importingTo !== null}
+                >
+                  {importingTo === "import_contacts_nexus" ? "Importando..." : "Importar no Nexus"}
+                </button>
+              )}
+              {integrationActions.find(a => a.key === "import_contacts_amplex") && (
+                <button
+                  className="btn"
+                  style={{ background: "rgba(124,58,237,0.2)", color: "#a78bfa", border: "1px solid rgba(124,58,237,0.3)" }}
+                  onClick={() => handleExportForImport("import_contacts_amplex")}
+                  disabled={data.total === 0 || importingTo !== null}
+                >
+                  {importingTo === "import_contacts_amplex" ? "Importando..." : "Importar no CRM"}
+                </button>
+              )}
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowProcessModal(true)}
+                disabled={data.total === 0}
+              >
+                Processar / Exportar
+              </button>
+            </div>
           </div>
 
           <div className="table-container">

@@ -312,6 +312,36 @@ export const exportApi = {
   status: (taskId: string) => request<ExportStatus>(`/export/${taskId}`),
 };
 
+// ─── Cross-Product Integrations ────────────────────────────
+
+export interface IntegrationAction {
+  integration: string;
+  target: string;
+  target_url: string;
+  key: string;
+  label: string;
+  description: string;
+  endpoint: string;
+  method: string;
+}
+
+export interface IntegrationActionsResponse {
+  source: string;
+  organization: string;
+  actions: IntegrationAction[];
+}
+
+export const integrationsApi = {
+  getActions: () =>
+    request<IntegrationActionsResponse>("/v1/integrations/actions/entity"),
+
+  exportForImport: (searchId: string, target: "nexus" | "amplex", options?: { with_phone?: boolean; with_email?: boolean; limit?: number }) =>
+    request<{ total: number; contacts: unknown[]; import_url: string }>("/v1/integrations/export-for-import", {
+      method: "POST",
+      body: JSON.stringify({ search_id: searchId, target, ...options }),
+    }),
+};
+
 // ─── Admin ─────────────────────────────────────────────────
 
 export interface Stats {

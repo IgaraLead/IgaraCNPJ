@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import AppLayout from "./shared/layout/AppLayout";
 import LoginPage from "./modules/auth/LoginPage";
 import RegisterPage from "./modules/auth/RegisterPage";
+import AuthCallback from "./modules/auth/AuthCallback";
 import DashboardPage from "./modules/dashboard/DashboardPage";
 import SearchPage from "./modules/search/SearchPage";
 import HistoryPage from "./modules/history/HistoryPage";
@@ -26,6 +27,7 @@ export default function App() {
           {/* Public routes */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
 
           {/* Protected routes */}
           <Route element={<AppLayout />}>

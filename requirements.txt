@@ -33,5 +33,8 @@ boto3>=1.34.0,<2.0
 # ETL – download
 requests>=2.31.0,<3.0
 
+# Hub integration – JWKS fetching
+httpx>=0.27.0,<1.0
+
 # CORS (included with fastapi, listed for clarity)
 # starlette – comes with fastapi

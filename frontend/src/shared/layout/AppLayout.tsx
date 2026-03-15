@@ -15,7 +15,6 @@ const adminItems = [
   { to: "/admin", label: "Admin", icon: "admin" },
 ];
 
-/* SVG icons for sidebar (no emojis) */
 function NavIcon({ name }: { name: string }) {
   const props = { width: 18, height: 18, fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   switch (name) {
@@ -36,27 +35,34 @@ function NavIcon({ name }: { name: string }) {
   }
 }
 
+const TOP_BAR_HEIGHT = 40;
+const SIDEBAR_COLLAPSED = 68;
+const SIDEBAR_EXPANDED = 260;
+const CURRENT_PLATFORM = "entity";
+
+const HUB_URL = import.meta.env.VITE_HUB_URL || "";
+const NEXUS_URL = import.meta.env.VITE_NEXUS_URL || "";
+const AMPLEX_URL = import.meta.env.VITE_AMPLEX_URL || "";
+
+const platforms = [
+  { key: "hub", name: "Hub", url: HUB_URL, icon: "🏠" },
+  { key: "entity", name: "Entity", url: "", icon: "🔍" },
+  { key: "amplex", name: "Amplex", url: AMPLEX_URL, icon: "📊" },
+  { key: "nexus", name: "Nexus", url: NEXUS_URL, icon: "💬" },
+];
+
 export default function AppLayout() {
   const { user, loading, fetchUser, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem("sidebar_collapsed") === "true"; } catch { return false; }
-  });
+  const [hovered, setHovered] = useState(false);
 
-  useEffect(() => {
-    try { localStorage.setItem("sidebar_collapsed", String(collapsed)); } catch {}
-  }, [collapsed]);
+  const collapsed = !hovered;
+  const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
 
-  useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
-
-  // Close sidebar on route change (mobile)
-  useEffect(() => {
-    setSidebarOpen(false);
-  }, [location.pathname]);
+  useEffect(() => { fetchUser(); }, [fetchUser]);
+  useEffect(() => { setSidebarOpen(false); }, [location.pathname]);
 
   if (loading) {
     return (
@@ -68,76 +74,68 @@ export default function AppLayout() {
     );
   }
 
-  if (!user) {
-    return <Navigate to="/login" replace />;
-  }
+  if (!user) return <Navigate to="/login" replace />;
 
   const items = ["admin", "super_admin"].includes(user.role) ? [...navItems, ...adminItems] : navItems;
-
-  const sidebarWidth = collapsed ? 68 : 260;
+  const visiblePlatforms = platforms.filter(p => p.key === CURRENT_PLATFORM || p.url);
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
-      {/* Mobile menu button */}
       <button className="mobile-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
         {sidebarOpen ? "✕" : "☰"}
       </button>
-
-      {/* Mobile overlay */}
       <div className={`sidebar-overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
 
-      {/* Sidebar wrapper – holds sidebar + protruding toggle button */}
-      <div style={{ position: "fixed", top: 0, left: 0, bottom: 0, width: sidebarWidth, zIndex: 50, transition: "width 0.25s ease", overflow: "visible" }}>
-        {/* Collapse/expand toggle – sits on the edge */}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          title={collapsed ? "Expandir menu" : "Recolher menu"}
-          style={{
-            position: "absolute",
-            top: collapsed ? "1.65rem" : "2.15rem",
-            right: "-13px",
-            zIndex: 51,
-            width: "26px",
-            height: "26px",
-            background: "rgba(14,17,28,0.95)",
-            border: "1px solid rgba(45,56,71,0.5)",
-            borderRadius: "50%",
-            color: "rgba(255,255,255,0.6)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            transition: "top 0.25s ease, background 0.2s, color 0.2s",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(45,56,71,0.9)"; e.currentTarget.style.color = "#fff"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(14,17,28,0.95)"; e.currentTarget.style.color = "rgba(255,255,255,0.6)"; }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            {collapsed
-              ? <polyline points="9 18 15 12 9 6" />
-              : <polyline points="15 18 9 12 15 6" />
-            }
-          </svg>
-        </button>
+      {/* Universal Top Bar */}
+      <div style={{
+        position: "fixed", top: 0, left: 0, right: 0, height: TOP_BAR_HEIGHT,
+        background: "rgba(14,17,28,0.95)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+        borderBottom: "1px solid rgba(45,56,71,0.3)",
+        display: "flex", alignItems: "center", padding: "0 1rem", zIndex: 60, gap: "0.25rem",
+      }}>
+        {visiblePlatforms.map(p => {
+          const isCurrent = p.key === CURRENT_PLATFORM;
+          return (
+            <a
+              key={p.key}
+              href={isCurrent ? undefined : p.url}
+              onClick={e => { if (isCurrent) e.preventDefault(); }}
+              style={{
+                display: "flex", alignItems: "center", gap: "0.4rem",
+                padding: "0.3rem 0.75rem", borderRadius: "8px", textDecoration: "none",
+                background: isCurrent ? "rgba(0,112,255,0.12)" : "transparent",
+                border: isCurrent ? "1px solid rgba(0,112,255,0.25)" : "1px solid transparent",
+                color: isCurrent ? "#fff" : "rgba(255,255,255,0.55)",
+                fontSize: "0.8rem", fontWeight: isCurrent ? 600 : 400,
+                transition: "all 0.2s", cursor: isCurrent ? "default" : "pointer",
+              }}
+              onMouseEnter={e => { if (!isCurrent) { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "#fff"; } }}
+              onMouseLeave={e => { if (!isCurrent) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.55)"; } }}
+            >
+              <span style={{ fontSize: "0.85rem" }}>{p.icon}</span>
+              <span>{p.name}</span>
+            </a>
+          );
+        })}
+      </div>
 
-        {/* Sidebar panel */}
+      {/* Sidebar – collapsed by default, expands on hover */}
+      <div
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{ position: "fixed", top: TOP_BAR_HEIGHT, left: 0, bottom: 0, width: sidebarWidth, zIndex: 50, transition: "width 0.25s ease" }}
+      >
         <aside
           className={`sidebar ${sidebarOpen ? "open" : ""}`}
           style={{
-            width: "100%",
-            height: "100%",
+            width: "100%", height: "100%",
             padding: collapsed ? "1.5rem 0.5rem" : "1.5rem 1rem",
-            display: "flex",
-            flexDirection: "column",
-            gap: "0.25rem",
-            borderRadius: 0,
-            borderRight: "1px solid rgba(45,56,71,0.3)",
+            display: "flex", flexDirection: "column", gap: "0.25rem",
+            borderRadius: 0, borderRight: "1px solid rgba(45,56,71,0.3)",
             background: "rgba(14,17,28,0.92)",
-            backdropFilter: "blur(20px)",
-            WebkitBackdropFilter: "blur(20px)",
-            overflowY: "auto",
-            transition: "padding 0.25s ease",
+            backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+            overflowY: "auto", transition: "padding 0.25s ease",
+            boxShadow: !collapsed ? "4px 0 20px rgba(0,0,0,0.3)" : "none",
           }}
         >
           <div style={{ padding: collapsed ? "0.5rem 0" : "0.5rem", marginBottom: "1rem", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -146,7 +144,7 @@ export default function AppLayout() {
                 <Logo size={36} style={{ flexShrink: 0 }} />
                 <div style={{ minWidth: 0 }}>
                   <h2 style={{ fontSize: "1.05rem", fontWeight: 700, lineHeight: 1.2 }}>
-                    <span style={{ background: "linear-gradient(135deg, hsl(268,100%,60%), hsl(213,100%,60%))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>IgaraLead Entity</span>
+                    <span style={{ fontFamily: "'Sansation', 'Space Grotesk', sans-serif", background: "linear-gradient(135deg, hsl(268,100%,60%), hsl(213,100%,60%))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>IgaraLead Entity</span>
                   </h2>
                   <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem", marginTop: "0.15rem" }}>
                     {user.plano ? `Plano: ${user.plano.charAt(0).toUpperCase() + user.plano.slice(1)}` : "Plano gratuito"}
@@ -158,86 +156,71 @@ export default function AppLayout() {
             )}
           </div>
 
-        <nav style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-          {items.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className="sidebar-nav-btn"
-              title={collapsed ? item.label : undefined}
-              style={({ isActive }) => ({
-                display: "flex",
-                alignItems: "center",
-                gap: collapsed ? 0 : "0.75rem",
-                justifyContent: collapsed ? "center" : "flex-start",
-                padding: collapsed ? "0.65rem" : "0.65rem 0.85rem",
-                borderRadius: "10px",
-                textDecoration: "none",
-                color: isActive ? "#fff" : "rgba(255,255,255,0.55)",
-                fontSize: "0.875rem",
-                fontWeight: isActive ? 600 : 400,
-                transition: "all 0.3s ease",
-                position: "relative",
-                overflow: "hidden",
-                background: isActive ? "rgba(0,112,255,0.12)" : "transparent",
-                border: isActive
-                  ? "1px solid rgba(0,112,255,0.25)"
-                  : "1px solid transparent",
-                boxShadow: isActive
-                  ? "0 0 15px rgba(0,112,255,0.1), inset 0 1px 0 rgba(255,255,255,0.06)"
-                  : "none",
-              })}
-            >
-              <NavIcon name={item.icon} />
-              {!collapsed && item.label}
-            </NavLink>
-          ))}
-        </nav>
+          <nav style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {items.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className="sidebar-nav-btn"
+                title={collapsed ? item.label : undefined}
+                style={({ isActive }) => ({
+                  display: "flex", alignItems: "center",
+                  gap: collapsed ? 0 : "0.75rem",
+                  justifyContent: collapsed ? "center" : "flex-start",
+                  padding: collapsed ? "0.65rem" : "0.65rem 0.85rem",
+                  borderRadius: "10px", textDecoration: "none",
+                  color: isActive ? "#fff" : "rgba(255,255,255,0.55)",
+                  fontSize: "0.875rem", fontWeight: isActive ? 600 : 400,
+                  transition: "all 0.3s ease", position: "relative", overflow: "hidden",
+                  background: isActive ? "rgba(0,112,255,0.12)" : "transparent",
+                  border: isActive ? "1px solid rgba(0,112,255,0.25)" : "1px solid transparent",
+                  boxShadow: isActive ? "0 0 15px rgba(0,112,255,0.1), inset 0 1px 0 rgba(255,255,255,0.06)" : "none",
+                })}
+              >
+                <NavIcon name={item.icon} />
+                {!collapsed && item.label}
+              </NavLink>
+            ))}
+          </nav>
 
-        <div style={{ borderTop: "1px solid rgba(45,56,71,0.5)", paddingTop: "1rem", marginTop: "0.5rem" }}>
-          {!collapsed ? (
-            <>
-              <div style={{ padding: "0.5rem 0.75rem", marginBottom: "0.5rem" }}>
-                <p style={{ color: "#fff", fontSize: "0.875rem", fontWeight: 500 }}>{user.nome}</p>
-                <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.75rem" }}>{user.email}</p>
-                <p style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.75rem", marginTop: "0.25rem" }}>
-                  Créditos: <strong style={{ color: "#fff" }}>{user.saldo_creditos.toLocaleString("pt-BR")}</strong>
-                </p>
-              </div>
+          <div style={{ borderTop: "1px solid rgba(45,56,71,0.5)", paddingTop: "1rem", marginTop: "0.5rem" }}>
+            {!collapsed ? (
+              <>
+                <div style={{ padding: "0.5rem 0.75rem", marginBottom: "0.5rem" }}>
+                  <p style={{ color: "#fff", fontSize: "0.875rem", fontWeight: 500 }}>{user.nome}</p>
+                  <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.75rem" }}>{user.email}</p>
+                  <p style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.75rem", marginTop: "0.25rem" }}>
+                    Créditos: <strong style={{ color: "#fff" }}>{user.saldo_creditos.toLocaleString("pt-BR")}</strong>
+                  </p>
+                </div>
+                <button className="btn btn-ghost" style={{ width: "100%", justifyContent: "center" }} onClick={() => logout().then(() => navigate("/login"))}>
+                  Sair
+                </button>
+              </>
+            ) : (
               <button
                 className="btn btn-ghost"
-                style={{ width: "100%", justifyContent: "center" }}
+                style={{ width: "100%", justifyContent: "center", padding: "0.5rem" }}
+                title={`${user.nome} · ${user.saldo_creditos} créditos`}
                 onClick={() => logout().then(() => navigate("/login"))}
               >
-                Sair
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
               </button>
-            </>
-          ) : (
-            <button
-              className="btn btn-ghost"
-              style={{ width: "100%", justifyContent: "center", padding: "0.5rem" }}
-              title={`${user.nome} · ${user.saldo_creditos} créditos`}
-              onClick={() => logout().then(() => navigate("/login"))}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </aside>
+            )}
+          </div>
+        </aside>
       </div>
 
-      {/* Main content – offset by sidebar width, independently scrollable */}
-      <main style={{ flex: 1, marginLeft: sidebarWidth, minHeight: "100vh", overflowY: "auto", display: "flex", flexDirection: "column", transition: "margin-left 0.25s ease" }}>
+      {/* Main content – fixed offset by collapsed sidebar width */}
+      <main style={{ flex: 1, marginLeft: SIDEBAR_COLLAPSED, marginTop: TOP_BAR_HEIGHT, minHeight: `calc(100vh - ${TOP_BAR_HEIGHT}px)`, overflowY: "auto", display: "flex", flexDirection: "column" }}>
         <div style={{ flex: 1 }}>
           <Outlet />
         </div>
         <footer style={{
-          padding: "1rem 2rem",
-          textAlign: "center",
-          color: "rgba(255,255,255,0.35)",
-          fontSize: "0.75rem",
+          padding: "1rem 2rem", textAlign: "center",
+          color: "rgba(255,255,255,0.35)", fontSize: "0.75rem",
           borderTop: "1px solid rgba(45,56,71,0.3)",
         }}>
           © {new Date().getFullYear()}{" "}

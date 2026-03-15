@@ -3,6 +3,8 @@ import { Link, useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "../../shared/store";
 import Logo from "../../shared/ui/Logo";
 
+const HUB_URL = import.meta.env.VITE_HUB_URL || "http://localhost:8001";
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
@@ -24,6 +26,19 @@ export default function LoginPage() {
   }
 
   if (user) return <Navigate to="/dashboard" replace />;
+
+  const handleHubLogin = () => {
+    const state = crypto.randomUUID();
+    sessionStorage.setItem("oauth_state", state);
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: "entity",
+      redirect_uri: `${window.location.origin}/auth/callback`,
+      scope: "openid profile email",
+      state,
+    });
+    window.location.href = `${HUB_URL}/oauth/authorize?${params}`;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,6 +94,30 @@ export default function LoginPage() {
             {loading ? "Entrando..." : "Entrar"}
           </button>
         </form>
+
+        {/* Separator */}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", margin: "1.25rem 0" }}>
+          <div style={{ flex: 1, height: "1px", background: "rgba(255,255,255,0.1)" }} />
+          <span style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.75rem" }}>ou</span>
+          <div style={{ flex: 1, height: "1px", background: "rgba(255,255,255,0.1)" }} />
+        </div>
+
+        {/* Hub SSO button */}
+        <button
+          type="button"
+          onClick={handleHubLogin}
+          style={{
+            width: "100%", display: "flex", alignItems: "center", justifyContent: "center",
+            gap: "0.5rem", padding: "0.75rem", borderRadius: "10px", cursor: "pointer",
+            background: "rgba(0,112,255,0.1)", border: "1px solid rgba(0,112,255,0.3)",
+            color: "#60a5fa", fontSize: "0.875rem", fontWeight: 500,
+            transition: "all 0.2s",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,112,255,0.2)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,112,255,0.1)"; }}
+        >
+          🏠 Entrar com IgaraHub
+        </button>
 
         <p style={{ textAlign: "center", marginTop: "1.5rem", color: "rgba(255,255,255,0.6)", fontSize: "0.875rem" }}>
           Não tem conta?{" "}
